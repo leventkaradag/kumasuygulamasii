@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f7f5f2;
+  --foreground: #171717;
+  --coffee-surface: #f7f5f2;
+  --coffee-primary: #bfa58c;
+  --coffee-accent: #c8b6a6;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-coffee-surface: var(--coffee-surface);
+  --color-coffee-primary: var(--coffee-primary);
+  --color-coffee-accent: var(--coffee-accent);
+}
+
+body {
+  background: var(--color-coffee-surface);
+  color: var(--foreground);
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+}
