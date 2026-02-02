@@ -1,36 +1,92 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Kumasci Panel
 
-## Getting Started
+Kumasci Panel; desen, depo, dokuma ve boyahane akislari icin hazirlanmis, Next.js App Router tabanli bir kontrol paneli iskeletidir.
+Modern ve sade bir arayuzle temel sayfa rotalari, demo auth akisi ve premium gorunumlu giris ekrani sunar.
 
-First, run the development server:
+## Teknoloji
+
+- Next.js 16 (App Router)
+- React 19
+- TypeScript
+- Tailwind CSS
+- GSAP (animasyonlar)
+
+## Kurulum
+
+```bash
+npm install
+```
+
+## Gelistirme
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Tarayicida ac:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+http://localhost:3000
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Uretim Build
 
-## Learn More
+```bash
+npm run build
+npm run start
+```
 
-To learn more about Next.js, take a look at the following resources:
+Not: Windows + OneDrive kullaniyorsaniz `.next` klasoru kilitlenebilir. Bu durumda build oncesi:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+cmd /c rmdir /s /q .next
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Proje Yapisi
 
-## Deploy on Vercel
+```
+app/                 # Next.js App Router
+app/(auth)/login     # GSAP animasyonlu login sayfasi
+components/          # UI bileenleri
+spa-pages/           # Icerik sayfalari (Layout ile gosterim)
+auth/                # Demo auth yardimcilari
+config/              # UI sabitleri / mock veriler
+mock/                # Ornek veri setleri
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Rotalar
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- /dashboard
+- /desenler
+- /depo
+- /dokuma
+- /boyahane
+- /raporlar
+- /ayarlar
+- /notlar
+- /siparis
+- /login
+- /register
+- /superadmin/users
+
+## Login Ekrani
+
+Login ekrani tamamen client-side calisir ve GSAP ile animasyonlu arka plan icerir.
+`prefers-reduced-motion` ayarini destekler; hareket azaltildiysa animasyon devre disi kalir.
+
+## Ortam Degiskenleri
+
+`.env` icinde:
+
+```
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+```
+
+Supabase simdilik demo icin yer tutucu olarak eklenmistir.
+
+## Notlar
+
+- Demo auth verileri localStorage icinde tutulur.
+- Tasarim iskeleti moduler sekilde genisletilebilir.
+
