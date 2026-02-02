@@ -1,26 +1,53 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f7f1e8;
+  --foreground: #1b1713;
+  --coffee-surface: #f6efe6;
+  --coffee-primary: #c59a6d;
+  --coffee-accent: #7b5743;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-coffee-surface: var(--coffee-surface);
+  --color-coffee-primary: var(--coffee-primary);
+  --color-coffee-accent: var(--coffee-accent);
 }
 
 body {
-  background: var(--background);
+  background: var(--color-coffee-surface);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+}
+
+.font-display {
+  font-family: var(--font-display), "Times New Roman", serif;
+}
+
+.page-shell {
+  background:
+    radial-gradient(1200px circle at 10% -10%, rgba(245, 213, 174, 0.55) 0%, transparent 55%),
+    radial-gradient(900px circle at 92% 15%, rgba(199, 160, 122, 0.35) 0%, transparent 55%),
+    linear-gradient(180deg, #f8f2ea 0%, #f4eee6 55%, #f9f6f1 100%);
+}
+
+.page-grid {
+  background-image:
+    linear-gradient(rgba(120, 88, 64, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120, 88, 64, 0.08) 1px, transparent 1px);
+  background-size: 24px 24px;
+  mask-image: radial-gradient(circle at 20% 20%, black 0%, transparent 55%);
+}
+
+.noise-overlay {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.22'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+  mix-blend-mode: soft-light;
+}
+
+::selection {
+  background: rgba(197, 154, 109, 0.35);
+  color: #1b1713;
 }
