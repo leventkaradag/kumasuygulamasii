@@ -1,11 +1,11 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 
-import Depo from "./pages/Depo.tsx";
-import Desenler from "./pages/Desenler.tsx";
-import Dokuma from "./pages/Dokuma.tsx";
-import Boyahane from "./pages/Boyahane.tsx";
-import Raporlar from "./pages/Raporlar.tsx";
-import Ayarlar from "./pages/Ayarlar.tsx";
+import Depo from "./pages_DISABLED/Depo.js";
+import Desenler from "./pages_DISABLED/Desenler.js";
+import Dokuma from "./pages_DISABLED/Dokuma.js";
+import Boyahane from "./pages_DISABLED/Boyahane.js";
+import Raporlar from "./pages_DISABLED/Raporlar.js";
+import Ayarlar from "./pages_DISABLED/Ayarlar.js";
 
 export default function App() {
   return (
