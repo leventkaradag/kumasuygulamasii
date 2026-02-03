@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
+import Link from "next/link";
 import { cn } from "../lib/cn";
 
 type DashboardTileProps = {
@@ -39,7 +39,7 @@ export function DashboardTile({ title, to = "#", icon, disabled, badge, classNam
   }
 
   return (
-    <Link to={to} className={cn(baseTileClasses, interactiveClasses, className)}>
+    <Link href={to} className={cn(baseTileClasses, interactiveClasses, className)}>
       <TileContent icon={icon} title={title} badge={badge} />
     </Link>
   );

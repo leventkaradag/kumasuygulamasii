@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, LogOut, Settings2, UserRound, UserRoundCog } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useRouter } from "next/navigation";
 import { USER_MOCK } from "../config/userMock";
 import { cn } from "../lib/cn";
 import { useOutsideClick } from "../hooks/useOutsideClick";
 
 export function UserMenu() {
-  const navigate = useNavigate();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
-  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
-  useOutsideClick(wrapperRef, () => setOpen(false));
+  useOutsideClick(wrapperRef as any, () => setOpen(false));
 
   useEffect(() => {
     if (!open) return;
@@ -62,7 +62,7 @@ export function UserMenu() {
           icon={<Settings2 className="h-4 w-4" />}
           label="Ayarlar"
           onClick={() => {
-            navigate("/ayarlar");
+            router.push("/ayarlar");
             setOpen(false);
           }}
         />

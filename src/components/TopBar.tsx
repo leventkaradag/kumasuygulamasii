@@ -1,5 +1,5 @@
 import { ArrowLeft, CalendarRange, Home, Search } from "lucide-react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useRouter, usePathname } from "next/navigation";
 import { Breadcrumb } from "./Breadcrumb";
 import { KpiChips } from "./KpiChips";
 import { UserMenu } from "./UserMenu";
@@ -26,8 +26,8 @@ export function TopBar({
   dateRange,
   onDateRangeChange,
 }: TopBarProps) {
-  const navigate = useNavigate();
-  const location = useLocation();
+  const router = useRouter();
+  const pathname = usePathname();
 
   const handleDateChange = (field: keyof DateRange, value: string) => {
     onDateRangeChange({ ...dateRange, [field]: value });
@@ -40,7 +40,7 @@ export function TopBar({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => navigate(-1)}
+              onClick={() => router.back()}
               className="flex items-center gap-2 rounded-full border border-black/5 bg-white px-3 py-2 text-sm font-semibold text-neutral-800 shadow-[0_4px_12px_rgba(0,0,0,0.06)] transition hover:-translate-y-0.5 hover:shadow-[0_8px_16px_rgba(0,0,0,0.08)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-coffee-primary"
             >
               <ArrowLeft className="h-4 w-4" aria-hidden />
@@ -48,7 +48,7 @@ export function TopBar({
             </button>
             <button
               type="button"
-              onClick={() => navigate("/")}
+              onClick={() => router.push("/")}
               className="flex items-center gap-2 rounded-full border border-black/5 bg-coffee-primary/10 px-3 py-2 text-sm font-semibold text-neutral-900 shadow-[0_4px_12px_rgba(0,0,0,0.06)] transition hover:-translate-y-0.5 hover:shadow-[0_8px_16px_rgba(0,0,0,0.08)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-coffee-primary"
             >
               <Home className="h-4 w-4 text-coffee-primary" aria-hidden />
@@ -100,7 +100,7 @@ export function TopBar({
         </div>
 
         <div className="pb-2">
-          <Breadcrumb pathname={location.pathname} labels={routeLabels} />
+          <Breadcrumb pathname={pathname || "/"} labels={routeLabels} />
         </div>
       </div>
     </header>

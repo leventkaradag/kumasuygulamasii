@@ -1,5 +1,5 @@
 import { ChevronRight } from "lucide-react";
-import { Link } from "react-router-dom";
+import Link from "next/link";
 import { cn } from "../lib/cn";
 
 type BreadcrumbProps = {
@@ -53,7 +53,7 @@ export function Breadcrumb({ pathname, labels, className }: BreadcrumbProps) {
               </span>
             ) : (
               <Link
-                to={crumb.to}
+                href={crumb.to}
                 className="max-w-[14ch] truncate text-neutral-600 transition hover:text-neutral-900"
               >
                 {crumb.label}

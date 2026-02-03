@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Factory, Layers, Warehouse } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useRouter } from "next/navigation";
 import { UI_FLAGS } from "../config/uiFlags";
 import { cn } from "../lib/cn";
 
@@ -11,7 +11,7 @@ const shortcuts = [
 ];
 
 export function QuickFab() {
-  const navigate = useNavigate();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
@@ -42,7 +42,7 @@ export function QuickFab() {
   if (!UI_FLAGS.quickFab) return null;
 
   const handleNavigate = (to: string) => {
-    navigate(to);
+    router.push(to);
     setOpen(false);
   };
 
