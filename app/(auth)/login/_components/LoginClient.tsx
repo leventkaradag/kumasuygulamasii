@@ -3,6 +3,8 @@
 import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { gsap } from "gsap";
+import { useRouter } from "next/navigation";
+import { login } from "@/auth/auth";
 
 type FormErrors = {
   email?: string;
@@ -16,7 +18,13 @@ const ORBS = [
   { size: 300, bottom: "-12%", right: "18%", color: "rgba(77, 176, 255, 0.25)" },
 ];
 
+const DEMO_CREDENTIALS = {
+  email: "admin@kumasci.local",
+  password: "admin1234",
+};
+
 export default function LoginClient() {
+  const router = useRouter();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const orbOuterRefs = useRef<HTMLDivElement[]>([]);
   const orbInnerRefs = useRef<HTMLDivElement[]>([]);
@@ -25,6 +33,7 @@ export default function LoginClient() {
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
   const [errors, setErrors] = useState<FormErrors>({});
+  const [formError, setFormError] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -124,9 +133,15 @@ export default function LoginClient() {
     event.preventDefault();
     if (!validate()) return;
 
+    setFormError("");
     setLoading(true);
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    setLoading(false);
+    try {
+      login(email, password);
+      router.replace("/dashboard");
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Giris basarisiz.");
+      setLoading(false);
+    }
   };
 
   return (
@@ -167,63 +182,90 @@ export default function LoginClient() {
         ))}
       </div>
 
-      <div className="relative z-10 w-full max-w-md rounded-3xl border border-white/10 bg-white/10 p-8 shadow-[0_30px_70px_rgba(0,0,0,0.45)] backdrop-blur-2xl">
-        <div className="mb-8 space-y-2 text-center">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white/15 text-lg font-semibold">
-            KP
+      <div className="relative z-10 grid w-full max-w-5xl gap-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-center">
+        <div className="w-full max-w-md justify-self-center rounded-3xl border border-white/10 bg-white/10 p-8 shadow-[0_30px_70px_rgba(0,0,0,0.45)] backdrop-blur-2xl">
+          <div className="mb-8 space-y-2 text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white/15 text-lg font-semibold">
+              KP
+            </div>
+            <h1 className="text-2xl font-semibold tracking-tight">Kumasci Panel</h1>
+            <p className="text-sm text-white/70">Operasyonunuza guvenli giris</p>
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">Kumasci Panel</h1>
-          <p className="text-sm text-white/70">Operasyonunuza guvenli giris</p>
+
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-white/80">Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(event) => {
+                  setEmail(event.target.value);
+                  if (formError) setFormError("");
+                }}
+                className="w-full rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white outline-none transition focus:border-white/40"
+                placeholder="email@firma.com"
+              />
+              {errors.email ? <p className="text-xs text-rose-200">{errors.email}</p> : null}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-white/80">Sifre</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  if (formError) setFormError("");
+                }}
+                className="w-full rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white outline-none transition focus:border-white/40"
+                placeholder="********"
+              />
+              {errors.password ? <p className="text-xs text-rose-200">{errors.password}</p> : null}
+            </div>
+
+            {formError ? <p className="text-sm text-rose-200">{formError}</p> : null}
+
+            <div className="flex items-center justify-between text-sm text-white/70">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={remember}
+                  onChange={(event) => setRemember(event.target.checked)}
+                  className="h-4 w-4 rounded border-white/20 bg-transparent"
+                />
+                Beni hatirla
+              </label>
+              <button type="button" className="text-sm text-white/80 hover:text-white">
+                Sifremi unuttum
+              </button>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-[#0b0b14] shadow-[0_16px_30px_rgba(0,0,0,0.35)] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {loading ? "Giris yapiliyor..." : "Giris Yap"}
+            </button>
+          </form>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-white/80">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              className="w-full rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white outline-none transition focus:border-white/40"
-              placeholder="email@firma.com"
-            />
-            {errors.email ? <p className="text-xs text-rose-200">{errors.email}</p> : null}
+        <aside className="w-full rounded-3xl border border-white/15 bg-white/10 p-6 text-white shadow-[0_20px_40px_rgba(0,0,0,0.35)] backdrop-blur-2xl">
+          <h2 className="text-base font-semibold tracking-wide text-white/95">Demo Giris Bilgileri</h2>
+          <p className="mt-2 text-sm text-white/70">
+            Giris icin asagidaki SuperAdmin bilgilerini kullanabilirsiniz.
+          </p>
+          <div className="mt-5 space-y-3">
+            <div className="rounded-2xl border border-white/15 bg-black/20 px-4 py-3">
+              <p className="text-xs uppercase tracking-[0.12em] text-white/55">Email</p>
+              <p className="mt-1 text-sm font-medium text-white">{DEMO_CREDENTIALS.email}</p>
+            </div>
+            <div className="rounded-2xl border border-white/15 bg-black/20 px-4 py-3">
+              <p className="text-xs uppercase tracking-[0.12em] text-white/55">Sifre</p>
+              <p className="mt-1 text-sm font-medium text-white">{DEMO_CREDENTIALS.password}</p>
+            </div>
           </div>
-
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-white/80">Sifre</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              className="w-full rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white outline-none transition focus:border-white/40"
-              placeholder="••••••••"
-            />
-            {errors.password ? <p className="text-xs text-rose-200">{errors.password}</p> : null}
-          </div>
-
-          <div className="flex items-center justify-between text-sm text-white/70">
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={remember}
-                onChange={(event) => setRemember(event.target.checked)}
-                className="h-4 w-4 rounded border-white/20 bg-transparent"
-              />
-              Beni hatirla
-            </label>
-            <button type="button" className="text-sm text-white/80 hover:text-white">
-              Sifremi unuttum
-            </button>
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-[#0b0b14] shadow-[0_16px_30px_rgba(0,0,0,0.35)] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {loading ? "Giris yapiliyor..." : "Giris Yap"}
-          </button>
-        </form>
+        </aside>
       </div>
     </div>
   );
