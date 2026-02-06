@@ -1,143 +1,169 @@
-export type Pattern = {
-  id: string;
-  patternNo: string;
-  patternName: string;
-  variantsCount: number;
-  totalProducedMeters: number;
-  stockMeters: number;
-  defectMeters: number;
-  inDyehouseMeters: number;
-  digitalImageUrl?: string;
-  finalImageUrl?: string;
-};
+import { Pattern, Variant } from "@/lib/domain/pattern";
+import { Stage } from "@/lib/domain/movement";
+
+export type { Pattern } from "@/lib/domain/pattern";
+
+const buildVariants = (patternId: string, count: number): Variant[] =>
+  Array.from({ length: count }, (_, index) => ({
+    id: `${patternId}-v${index + 1}`,
+    name: `V${index + 1}`,
+    active: true,
+  }));
+
+const entry = (
+  id: string,
+  fabricCode: string,
+  fabricName: string,
+  weaveType: string,
+  warpCount: string,
+  weftCount: string,
+  totalEnds: string,
+  variantsCount: number,
+  currentStage: Stage,
+  meters: { total: number; stock: number; defect: number; dyehouse: number },
+  images?: { digital?: string; final?: string }
+): Pattern => ({
+  id,
+  fabricCode,
+  fabricName,
+  weaveType,
+  warpCount,
+  weftCount,
+  totalEnds,
+  variants: buildVariants(id, variantsCount),
+  variantsCount,
+  currentStage,
+  totalProducedMeters: meters.total,
+  stockMeters: meters.stock,
+  defectMeters: meters.defect,
+  inDyehouseMeters: meters.dyehouse,
+  digitalImageUrl: images?.digital,
+  finalImageUrl: images?.final,
+});
 
 export const PATTERNS: Pattern[] = [
-  {
-    id: "p-001",
-    patternNo: "D-1201",
-    patternName: "Klasik Çizgi",
-    variantsCount: 3,
-    totalProducedMeters: 3250,
-    stockMeters: 1340,
-    defectMeters: 40,
-    inDyehouseMeters: 210,
-    digitalImageUrl:
-      "https://images.unsplash.com/photo-1506569422617-6ed97d5ebf68?auto=format&fit=crop&w=800&q=80",
-  },
-  {
-    id: "p-002",
-    patternNo: "D-1202",
-    patternName: "Ankara Dokuma",
-    variantsCount: 4,
-    totalProducedMeters: 2710,
-    stockMeters: 980,
-    defectMeters: 25,
-    inDyehouseMeters: 160,
-  },
-  {
-    id: "p-003",
-    patternNo: "D-1203",
-    patternName: "Keten Soft",
-    variantsCount: 2,
-    totalProducedMeters: 1840,
-    stockMeters: 640,
-    defectMeters: 12,
-    inDyehouseMeters: 90,
-    finalImageUrl:
-      "https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=800&q=80",
-  },
-  {
-    id: "p-004",
-    patternNo: "D-1204",
-    patternName: "Saten Pırıltı",
-    variantsCount: 5,
-    totalProducedMeters: 3620,
-    stockMeters: 1560,
-    defectMeters: 30,
-    inDyehouseMeters: 240,
-  },
-  {
-    id: "p-005",
-    patternNo: "D-1205",
-    patternName: "Mesh Nefes",
-    variantsCount: 3,
-    totalProducedMeters: 1180,
-    stockMeters: 420,
-    defectMeters: 14,
-    inDyehouseMeters: 70,
-  },
-  {
-    id: "p-006",
-    patternNo: "D-1206",
-    patternName: "Organik Pamuk",
-    variantsCount: 6,
-    totalProducedMeters: 3980,
-    stockMeters: 1870,
-    defectMeters: 55,
-    inDyehouseMeters: 320,
-  },
-  {
-    id: "p-007",
-    patternNo: "D-1207",
-    patternName: "Şönil Yumuşak",
-    variantsCount: 2,
-    totalProducedMeters: 2120,
-    stockMeters: 730,
-    defectMeters: 18,
-    inDyehouseMeters: 110,
-  },
-  {
-    id: "p-008",
-    patternNo: "D-1208",
-    patternName: "Jakarlı Gece",
-    variantsCount: 4,
-    totalProducedMeters: 2540,
-    stockMeters: 920,
-    defectMeters: 20,
-    inDyehouseMeters: 180,
-  },
-  {
-    id: "p-009",
-    patternNo: "D-1209",
-    patternName: "Kanvas Denim",
-    variantsCount: 3,
-    totalProducedMeters: 3100,
-    stockMeters: 1420,
-    defectMeters: 45,
-    inDyehouseMeters: 260,
-  },
-  {
-    id: "p-010",
-    patternNo: "D-1210",
-    patternName: "Likra Fit",
-    variantsCount: 2,
-    totalProducedMeters: 1190,
-    stockMeters: 510,
-    defectMeters: 10,
-    inDyehouseMeters: 70,
-  },
-  {
-    id: "p-011",
-    patternNo: "D-1211",
-    patternName: "Bambu Breeze",
-    variantsCount: 3,
-    totalProducedMeters: 2480,
-    stockMeters: 860,
-    defectMeters: 22,
-    inDyehouseMeters: 130,
-    finalImageUrl:
-      "https://images.unsplash.com/photo-1504198453319-5ce911bafcde?auto=format&fit=crop&w=800&q=80",
-  },
-  {
-    id: "p-012",
-    patternNo: "D-1212",
-    patternName: "Viscon Shine",
-    variantsCount: 1,
-    totalProducedMeters: 920,
-    stockMeters: 390,
-    defectMeters: 8,
-    inDyehouseMeters: 60,
-    digitalImageUrl:
-      "https://images.unsplash.com/photo-1504198453319-5ce911bafcde?auto=format&fit=crop&w=800&q=80",
-  },
+  entry(
+    "p-001",
+    "D-1201",
+    "Klasik Çizgi",
+    "Poplin",
+    "30/1 NE",
+    "40/1 NE",
+    "7600",
+    3,
+    "DEPO",
+    { total: 3250, stock: 1340, defect: 40, dyehouse: 210 },
+    {
+      digital:
+        "https://images.unsplash.com/photo-1506569422617-6ed97d5ebf68?auto=format&fit=crop&w=800&q=80",
+    }
+  ),
+  entry("p-002", "D-1202", "Ankara Dokuma", "Dimi", "20/1 NE", "20/1 NE", "6800", 4, "DOKUMA", {
+    total: 2710,
+    stock: 980,
+    defect: 25,
+    dyehouse: 160,
+  }),
+  entry(
+    "p-003",
+    "D-1203",
+    "Keten Soft",
+    "Keten",
+    "30/1 Keten",
+    "30/1 Keten",
+    "5400",
+    2,
+    "BOYAHANE",
+    { total: 1840, stock: 640, defect: 12, dyehouse: 90 },
+    {
+      final:
+        "https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=800&q=80",
+    }
+  ),
+  entry("p-004", "D-1204", "Saten Pırıltı", "Saten", "60/2 NE", "80/2 NE", "8800", 5, "DEPO", {
+    total: 3620,
+    stock: 1560,
+    defect: 30,
+    dyehouse: 240,
+  }),
+  entry("p-005", "D-1205", "Mesh Nefes", "Mesh", "40/1 PES", "40/1 PES", "6200", 3, "DOKUMA", {
+    total: 1180,
+    stock: 420,
+    defect: 14,
+    dyehouse: 70,
+  }),
+  entry(
+    "p-006",
+    "D-1206",
+    "Organik Pamuk",
+    "Bezayağı",
+    "30/1 Organic",
+    "30/1 Organic",
+    "7200",
+    6,
+    "DEPO",
+    { total: 3980, stock: 1870, defect: 55, dyehouse: 320 }
+  ),
+  entry(
+    "p-007",
+    "D-1207",
+    "Şönil Yumuşak",
+    "Şönil",
+    "10/1 Şönil",
+    "10/1 Şönil",
+    "5600",
+    2,
+    "BOYAHANE",
+    { total: 2120, stock: 730, defect: 18, dyehouse: 110 }
+  ),
+  entry("p-008", "D-1208", "Jakarlı Gece", "Jakar", "40/2 NE", "40/2 NE", "9100", 4, "DOKUMA", {
+    total: 2540,
+    stock: 920,
+    defect: 20,
+    dyehouse: 180,
+  }),
+  entry("p-009", "D-1209", "Kanvas Denim", "Denim", "10 oz", "10 oz", "7400", 3, "DEPO", {
+    total: 3100,
+    stock: 1420,
+    defect: 45,
+    dyehouse: 260,
+  }),
+  entry("p-010", "D-1210", "Likra Fit", "Likra", "40/1 NE", "40/1 NE", "6100", 2, "BOYAHANE", {
+    total: 1190,
+    stock: 510,
+    defect: 10,
+    dyehouse: 70,
+  }),
+  entry(
+    "p-011",
+    "D-1211",
+    "Bambu Breeze",
+    "Bambu",
+    "40/1 Bambu",
+    "40/1 Bambu",
+    "6600",
+    3,
+    "DEPO",
+    { total: 2480, stock: 860, defect: 22, dyehouse: 130 },
+    {
+      final:
+        "https://images.unsplash.com/photo-1504198453319-5ce911bafcde?auto=format&fit=crop&w=800&q=80",
+    }
+  ),
+  entry(
+    "p-012",
+    "D-1212",
+    "Viscon Shine",
+    "Viskon",
+    "30/1 Viskon",
+    "30/1 Viskon",
+    "6000",
+    1,
+    "BOYAHANE",
+    { total: 920, stock: 390, defect: 8, dyehouse: 60 },
+    {
+      digital:
+        "https://images.unsplash.com/photo-1504198453319-5ce911bafcde?auto=format&fit=crop&w=800&q=80",
+    }
+  ),
 ];

@@ -2,15 +2,21 @@
 
 import type { ReactNode } from "react";
 import { Image as ImageIcon, ImageOff, Layers, Package, Palette, Sparkles } from "lucide-react";
-import { Accordion } from "./Accordion";
-import { ImagePicker } from "./ImagePicker";
-import type { Pattern } from "../mock/patterns";
-import { cn } from "../lib/cn";
+import { Accordion } from "@/components/Accordion";
+import { ImagePicker } from "@/components/ImagePicker";
+import type { Pattern } from "@/mock/patterns";
+import { cn } from "@/lib/cn";
 
 type PatternDetailPanelProps = {
   pattern: Pattern | null;
   onSelectDigital: (file?: File) => void;
   onSelectFinal: (file?: File) => void;
+};
+
+const stageLabel: Record<string, string> = {
+  DEPO: "Depo",
+  BOYAHANE: "Boyahane",
+  DOKUMA: "Dokuma",
 };
 
 export function PatternDetailPanel({ pattern, onSelectDigital, onSelectFinal }: PatternDetailPanelProps) {
@@ -24,6 +30,8 @@ export function PatternDetailPanel({ pattern, onSelectDigital, onSelectFinal }: 
       </div>
     );
   }
+
+  const variantCount = pattern.variants?.length ?? 0;
 
   return (
     <div className="space-y-4 rounded-2xl border border-black/5 bg-white/80 p-6 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
@@ -46,7 +54,10 @@ export function PatternDetailPanel({ pattern, onSelectDigital, onSelectFinal }: 
         <div>
           <div className="text-xs uppercase tracking-wide text-neutral-500">Desen</div>
           <div className="text-lg font-semibold text-neutral-900">
-            {pattern.patternNo} · {pattern.patternName}
+            {pattern.fabricCode} · {pattern.fabricName}
+          </div>
+          <div className="mt-1 inline-flex rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-semibold text-neutral-700">
+            {stageLabel[pattern.currentStage] ?? pattern.currentStage}
           </div>
         </div>
       </div>
@@ -60,8 +71,29 @@ export function PatternDetailPanel({ pattern, onSelectDigital, onSelectFinal }: 
 
       <Accordion title="Detaylar" defaultOpen={false}>
         <div className="space-y-4">
+          <SectionBlock title="Ana bilgiler">
+            <dl className="grid grid-cols-2 gap-2 text-sm text-neutral-700">
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-neutral-500">Dokuma tipi</dt>
+                <dd className="font-medium text-neutral-900">{pattern.weaveType}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-neutral-500">Çözgü</dt>
+                <dd className="font-medium text-neutral-900">{pattern.warpCount}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-neutral-500">Atkı</dt>
+                <dd className="font-medium text-neutral-900">{pattern.weftCount}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-neutral-500">Toplam tel</dt>
+                <dd className="font-medium text-neutral-900">{pattern.totalEnds}</dd>
+              </div>
+            </dl>
+          </SectionBlock>
+
           <SectionBlock title="Varyantlar">
-            <p className="text-sm text-neutral-600">Toplam {pattern.variantsCount} varyant (placeholder)</p>
+            <p className="text-sm text-neutral-600">Toplam {variantCount} varyant</p>
           </SectionBlock>
 
           <SectionBlock title="Notlar">

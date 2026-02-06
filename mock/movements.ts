@@ -1,0 +1,50 @@
+import { Movement } from "@/lib/domain/movement";
+
+export const seedMovements: Movement[] = [
+  {
+    id: "m-seed-1",
+    patternId: "p-001",
+    variantId: "p-001-v1",
+    stage: "DEPO",
+    type: "IN",
+    meters: 500,
+    date: "2026-01-20",
+    note: "Başlangıç stoğu",
+  },
+  {
+    id: "m-seed-2",
+    patternId: "p-001",
+    variantId: "p-001-v2",
+    stage: "BOYAHANE",
+    type: "IN",
+    meters: 120,
+    date: "2026-02-01",
+  },
+  {
+    id: "m-seed-3",
+    patternId: "p-002",
+    stage: "DEPO",
+    type: "IN",
+    meters: 300,
+    date: "2026-01-28",
+    note: "Ana stok",
+  },
+  {
+    id: "m-seed-4",
+    patternId: "p-001",
+    stage: "DEPO",
+    type: "OUT",
+    meters: 80,
+    date: "2026-02-04",
+    note: "Numune sevki",
+  },
+  {
+    id: "m-seed-5",
+    patternId: "p-003",
+    variantId: "p-003-v1",
+    stage: "DOKUMA",
+    type: "IN",
+    meters: 200,
+    date: "2026-02-02",
+  },
+];

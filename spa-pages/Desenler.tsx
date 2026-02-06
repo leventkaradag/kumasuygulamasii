@@ -2,29 +2,63 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import { PatternDetailPanel } from "../components/PatternDetailPanel";
-import { PatternListItem } from "../components/PatternListItem";
-import { PATTERNS, type Pattern } from "../mock/patterns";
-import { cn } from "../lib/cn";
-import Layout from "../components/Layout";
+import Layout from "@/components/Layout";
+import { PatternDetailPanel } from "@/components/PatternDetailPanel";
+import { PatternListItem } from "@/components/PatternListItem";
+import { PatternModal } from "@/components/desen/PatternModal";
+import type { Pattern } from "@/lib/domain/pattern";
+import { Stage } from "@/lib/domain/movement";
+import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
+import { patternsRepo } from "@/lib/repos/patternsRepo";
+import { cn } from "@/lib/cn";
+
+const seedPatterns = patternsRepo.list();
+
+const stageFilters: { label: string; value: Stage | "ALL" }[] = [
+  { label: "Hepsi", value: "ALL" },
+  { label: "Dokuma", value: "DOKUMA" },
+  { label: "Boyahane", value: "BOYAHANE" },
+  { label: "Depo", value: "DEPO" },
+];
 
 export default function DesenlerPage() {
-  const [patterns, setPatterns] = useState<Pattern[]>(PATTERNS);
+  const [patterns, setPatterns] = useState<Pattern[]>(seedPatterns);
   const [search, setSearch] = useState("");
-  const [selectedId, setSelectedId] = useState<string>(PATTERNS[0]?.id ?? "");
+  const [stageFilter, setStageFilter] = useState<Stage | "ALL">("ALL");
+  const [selectedId, setSelectedId] = useState<string>(seedPatterns[0]?.id ?? "");
+  const [showPatternModal, setShowPatternModal] = useState(false);
   const objectUrlsRef = useRef<Record<string, { digital?: string; final?: string }>>({});
+
+  useEffect(() => {
+    setPatterns(patternsLocalRepo.list());
+  }, []);
+
+  useEffect(() => {
+    if (selectedId && patterns.some((p) => p.id === selectedId)) return;
+    if (patterns[0]) setSelectedId(patterns[0].id);
+  }, [patterns, selectedId]);
 
   const filteredPatterns = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return patterns;
-    return patterns.filter(
-      (p) =>
-        p.patternNo.toLowerCase().includes(query) ||
-        p.patternName.toLowerCase().includes(query)
-    );
-  }, [patterns, search]);
+    return patterns.filter((p) => {
+      const matchesSearch =
+        !query ||
+        p.fabricCode.toLowerCase().includes(query) ||
+        p.fabricName.toLowerCase().includes(query);
+      const matchesStage = stageFilter === "ALL" || p.currentStage === stageFilter;
+      return matchesSearch && matchesStage;
+    });
+  }, [patterns, search, stageFilter]);
 
   const selectedPattern = patterns.find((p) => p.id === selectedId) ?? null;
+
+  const handlePatternSave = (
+    fields: Pick<Pattern, "fabricCode" | "fabricName" | "weaveType" | "warpCount" | "weftCount" | "totalEnds">
+  ) => {
+    if (!selectedPattern) return;
+    patternsLocalRepo.update(selectedPattern.id, fields);
+    setPatterns((prev) => prev.map((p) => (p.id === selectedPattern.id ? { ...p, ...fields } : p)));
+  };
 
   const assignUrl = (type: "digital" | "final", file?: File) => {
     if (!file || !selectedId) return;
@@ -67,20 +101,56 @@ export default function DesenlerPage() {
             <h1 className="text-xl font-semibold text-neutral-900">Desenler</h1>
             <p className="text-sm text-neutral-600">Desen listesi ve görsel önizleme</p>
           </div>
-          <div className="w-full max-w-md">
-            <label className="relative block">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
-              <input
-                type="search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Desen no / adı ara"
+          <div className="flex w-full flex-col gap-2 md:max-w-lg">
+            <div className="w-full">
+              <label className="relative block">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Kumaş kodu / adı ara"
+                  className={cn(
+                    "w-full rounded-xl border border-black/5 bg-white px-10 py-2.5 text-sm text-neutral-900 shadow-[0_6px_14px_rgba(0,0,0,0.06)]",
+                    "placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                  )}
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {stageFilters.map(({ label, value }) => {
+                const active = stageFilter === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setStageFilter(value)}
+                    className={cn(
+                      "rounded-lg border px-3 py-1.5 text-sm font-semibold transition",
+                      active
+                        ? "border-coffee-primary bg-coffee-primary/10 text-coffee-primary"
+                        : "border-black/10 bg-white text-neutral-700 hover:border-coffee-primary/40"
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+              <div className="grow" />
+              <button
+                type="button"
+                disabled={!selectedPattern}
+                onClick={() => setShowPatternModal(true)}
                 className={cn(
-                  "w-full rounded-xl border border-black/5 bg-white px-10 py-2.5 text-sm text-neutral-900 shadow-[0_6px_14px_rgba(0,0,0,0.06)]",
-                  "placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                  "rounded-lg border px-3 py-1.5 text-sm font-semibold transition",
+                  selectedPattern
+                    ? "border-coffee-primary bg-coffee-primary/10 text-coffee-primary"
+                    : "cursor-not-allowed border-black/10 bg-white text-neutral-400"
                 )}
-              />
-            </label>
+              >
+                Deseni Düzenle
+              </button>
+            </div>
           </div>
         </div>
 
@@ -109,6 +179,14 @@ export default function DesenlerPage() {
             onSelectFinal={(file) => assignUrl("final", file)}
           />
         </div>
+
+        {showPatternModal && selectedPattern && (
+          <PatternModal
+            pattern={selectedPattern}
+            onClose={() => setShowPatternModal(false)}
+            onSave={handlePatternSave}
+          />
+        )}
       </div>
     </Layout>
   );
