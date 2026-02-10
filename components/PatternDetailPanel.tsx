@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Image as ImageIcon, ImageOff, Layers, Package, Palette, Sparkles } from "lucide-react";
+import { ChevronDown, Image as ImageIcon, ImageOff, Layers, Package, Palette, Sparkles } from "lucide-react";
 import { Accordion } from "@/components/Accordion";
 import { ImagePicker } from "@/components/ImagePicker";
 import { cn } from "@/lib/cn";
-import type { Pattern } from "@/lib/domain/pattern";
+import type { Pattern, Variant } from "@/lib/domain/pattern";
 import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
 
 type PatternDetailPanelProps = {
@@ -19,10 +19,76 @@ type MeterFields = Pick<
   "totalProducedMeters" | "stockMeters" | "inDyehouseMeters" | "defectMeters"
 >;
 
+type LogisticsDraft = {
+  musteri: string;
+  depoNo: string;
+  kg: string;
+  eniCm: string;
+  gramajGm2: string;
+  fireOrani: string;
+  createdAt: string;
+};
+
 const stageLabel: Record<string, string> = {
   DEPO: "Depo",
   BOYAHANE: "Boyahane",
   DOKUMA: "Dokuma",
+};
+
+const toDraftNumber = (value?: number) =>
+  typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+
+const toDateInputValue = (value?: string) => {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toISOString().slice(0, 10);
+};
+
+const createLogisticsDraft = (source?: Pattern | null): LogisticsDraft => ({
+  musteri: source?.musteri ?? "",
+  depoNo: source?.depoNo ?? "",
+  kg: toDraftNumber(source?.kg),
+  eniCm: toDraftNumber(source?.eniCm),
+  gramajGm2: toDraftNumber(source?.gramajGm2),
+  fireOrani: toDraftNumber(source?.fireOrani),
+  createdAt: toDateInputValue(source?.createdAt),
+});
+
+const createVariantId = () => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `v-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+const normalizeVariants = (variants?: Variant[]): Variant[] =>
+  (variants ?? []).map((variant) => {
+    const colorName = variant.colorName ?? variant.name ?? "";
+    const colorCode = variant.colorCode?.trim();
+    return {
+      ...variant,
+      id: variant.id || createVariantId(),
+      colorName,
+      colorCode: colorCode || undefined,
+      name: colorName,
+    };
+  });
+
+const parseOptionalNonNegativeNumber = (value: string): number | undefined | null => {
+  const raw = value.trim();
+  if (!raw) return undefined;
+  const parsed = Number(raw.replace(",", "."));
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed;
+};
+
+const normalizeNumberInputForCompare = (value: string): string => {
+  const raw = value.trim();
+  if (!raw) return "";
+  const parsed = parseOptionalNonNegativeNumber(raw);
+  if (parsed === null) return raw;
+  return parsed === undefined ? "" : String(parsed);
 };
 
 const fileToDataUrl = (file: File) =>
@@ -69,11 +135,20 @@ export function PatternDetailPanel({
     inDyehouseMeters: "0",
     defectMeters: "0",
   });
+  const [variantsDraft, setVariantsDraft] = useState<Variant[]>([]);
+  const [variantsStatus, setVariantsStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const [isVariantsOpen, setIsVariantsOpen] = useState(false);
+  const [isEditingLogistics, setIsEditingLogistics] = useState(false);
+  const [logisticsDraft, setLogisticsDraft] = useState<LogisticsDraft>(() => createLogisticsDraft());
+  const [logisticsError, setLogisticsError] = useState("");
+  const [logisticsStatus, setLogisticsStatus] = useState<"idle" | "saving" | "saved">("idle");
 
   const resetNoteStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resetImageStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resetMetersStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resetArchiveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resetLogisticsStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resetVariantsStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const latestPattern = pattern ? patternsLocalRepo.get(pattern.id) ?? pattern : null;
@@ -90,6 +165,11 @@ export function PatternDetailPanel({
     setImageStatus("idle");
     setMetersStatus("idle");
     setArchiveStatus("idle");
+    setVariantsStatus("idle");
+    setIsVariantsOpen(false);
+    setLogisticsStatus("idle");
+    setLogisticsError("");
+    setIsEditingLogistics(false);
     setShowMetersModal(false);
     setMetersError("");
     setSavedMeters({
@@ -104,6 +184,8 @@ export function PatternDetailPanel({
       inDyehouseMeters: String(latestPattern?.inDyehouseMeters ?? 0),
       defectMeters: String(latestPattern?.defectMeters ?? 0),
     });
+    setVariantsDraft(normalizeVariants(latestPattern?.variants));
+    setLogisticsDraft(createLogisticsDraft(latestPattern));
 
     if (resetNoteStatusTimerRef.current) {
       clearTimeout(resetNoteStatusTimerRef.current);
@@ -122,6 +204,14 @@ export function PatternDetailPanel({
       clearTimeout(resetArchiveStatusTimerRef.current);
       resetArchiveStatusTimerRef.current = null;
     }
+    if (resetLogisticsStatusTimerRef.current) {
+      clearTimeout(resetLogisticsStatusTimerRef.current);
+      resetLogisticsStatusTimerRef.current = null;
+    }
+    if (resetVariantsStatusTimerRef.current) {
+      clearTimeout(resetVariantsStatusTimerRef.current);
+      resetVariantsStatusTimerRef.current = null;
+    }
   }, [pattern?.id]);
 
   useEffect(() => {
@@ -138,6 +228,12 @@ export function PatternDetailPanel({
       if (resetArchiveStatusTimerRef.current) {
         clearTimeout(resetArchiveStatusTimerRef.current);
       }
+      if (resetLogisticsStatusTimerRef.current) {
+        clearTimeout(resetLogisticsStatusTimerRef.current);
+      }
+      if (resetVariantsStatusTimerRef.current) {
+        clearTimeout(resetVariantsStatusTimerRef.current);
+      }
     };
   }, []);
 
@@ -152,7 +248,7 @@ export function PatternDetailPanel({
     );
   }
 
-  const variantCount = pattern.variants?.length ?? 0;
+  const variantCount = variantsDraft.length;
 
   const hasNoteChanges = note.trim() !== savedNote.trim();
   const canSaveNote = hasNoteChanges && noteStatus !== "saving";
@@ -187,6 +283,32 @@ export function PatternDetailPanel({
     archiveStatus === "saving"
       ? "Kaydediliyor..."
       : archiveStatus === "saved"
+        ? "Kaydedildi ✅"
+        : "";
+
+  const logisticsStatusText =
+    logisticsStatus === "saving"
+      ? "Kaydediliyor..."
+      : logisticsStatus === "saved"
+        ? "Kaydedildi ✅"
+        : "";
+
+  const logisticsHasChanges =
+    logisticsDraft.musteri.trim() !== (pattern.musteri ?? "").trim() ||
+    logisticsDraft.depoNo.trim() !== (pattern.depoNo ?? "").trim() ||
+    normalizeNumberInputForCompare(logisticsDraft.kg) !== normalizeNumberInputForCompare(toDraftNumber(pattern.kg)) ||
+    normalizeNumberInputForCompare(logisticsDraft.eniCm) !== normalizeNumberInputForCompare(toDraftNumber(pattern.eniCm)) ||
+    normalizeNumberInputForCompare(logisticsDraft.gramajGm2) !==
+      normalizeNumberInputForCompare(toDraftNumber(pattern.gramajGm2)) ||
+    normalizeNumberInputForCompare(logisticsDraft.fireOrani) !==
+      normalizeNumberInputForCompare(toDraftNumber(pattern.fireOrani)) ||
+    logisticsDraft.createdAt.trim() !== toDateInputValue(pattern.createdAt);
+  const canSaveLogistics = logisticsStatus !== "saving" && logisticsHasChanges;
+
+  const variantsStatusText =
+    variantsStatus === "saving"
+      ? "Kaydediliyor..."
+      : variantsStatus === "saved"
         ? "Kaydedildi ✅"
         : "";
 
@@ -258,6 +380,23 @@ export function PatternDetailPanel({
   };
 
   const fmtMeters = (value: number) => (Number.isFinite(value) ? value.toLocaleString("tr-TR") : "0");
+  const formatOptionalNumber = (value?: number, suffix?: string) => {
+    if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+    const formatted = value.toLocaleString("tr-TR");
+    return suffix ? `${formatted} ${suffix}` : formatted;
+  };
+  const formatCreatedAt = (value?: string) => {
+    if (!value) return "-";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "-";
+    return parsed.toLocaleDateString("tr-TR");
+  };
+  const formatOptionalText = (value?: string) => {
+    const trimmed = value?.trim();
+    return trimmed ? trimmed : "-";
+  };
+  const logisticsInputClass =
+    "w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary";
 
   const openMetersModal = () => {
     setMetersDraft({
@@ -321,6 +460,163 @@ export function PatternDetailPanel({
     }, 1200);
   };
 
+  const persistVariants = (nextVariants: Variant[]) => {
+    if (resetVariantsStatusTimerRef.current) {
+      clearTimeout(resetVariantsStatusTimerRef.current);
+      resetVariantsStatusTimerRef.current = null;
+    }
+
+    setVariantsStatus("saving");
+
+    const normalizedNext = normalizeVariants(nextVariants).map((variant) => ({
+      id: variant.id,
+      colorName: variant.colorName,
+      colorCode: variant.colorCode,
+      name: variant.colorName,
+      active: variant.active,
+    }));
+
+    const updated = patternsLocalRepo.update(pattern.id, { variants: normalizedNext });
+    const refreshed = normalizeVariants(updated?.variants ?? normalizedNext);
+    setVariantsDraft(refreshed);
+    onPatternUpdated?.(updated);
+    setVariantsStatus("saved");
+
+    resetVariantsStatusTimerRef.current = setTimeout(() => {
+      setVariantsStatus("idle");
+      resetVariantsStatusTimerRef.current = null;
+    }, 1200);
+  };
+
+  const handleAddVariant = () => {
+    if (!isVariantsOpen) {
+      setIsVariantsOpen(true);
+    }
+
+    const nextVariants = [
+      ...variantsDraft,
+      {
+        id: createVariantId(),
+        colorName: "",
+        colorCode: undefined,
+        name: "",
+      },
+    ];
+    persistVariants(nextVariants);
+  };
+
+  const handleVariantFieldChange = (
+    variantId: string,
+    key: "colorName" | "colorCode",
+    rawValue: string
+  ) => {
+    const nextVariants = variantsDraft.map((variant) => {
+      if (variant.id !== variantId) return variant;
+      if (key === "colorCode") {
+        const trimmed = rawValue.trim();
+        return {
+          ...variant,
+          colorCode: trimmed || undefined,
+        };
+      }
+      return {
+        ...variant,
+        colorName: rawValue,
+      };
+    });
+    persistVariants(nextVariants);
+  };
+
+  const handleRemoveVariant = (variantId: string) => {
+    const nextVariants = variantsDraft.filter((variant) => variant.id !== variantId);
+    persistVariants(nextVariants);
+  };
+
+  const openLogisticsEditor = () => {
+    const latestPattern = patternsLocalRepo.get(pattern.id) ?? pattern;
+    if (resetLogisticsStatusTimerRef.current) {
+      clearTimeout(resetLogisticsStatusTimerRef.current);
+      resetLogisticsStatusTimerRef.current = null;
+    }
+    setLogisticsDraft(createLogisticsDraft(latestPattern));
+    setLogisticsError("");
+    setLogisticsStatus("idle");
+    setIsEditingLogistics(true);
+  };
+
+  const handleCancelLogistics = () => {
+    const latestPattern = patternsLocalRepo.get(pattern.id) ?? pattern;
+    if (resetLogisticsStatusTimerRef.current) {
+      clearTimeout(resetLogisticsStatusTimerRef.current);
+      resetLogisticsStatusTimerRef.current = null;
+    }
+    setLogisticsDraft(createLogisticsDraft(latestPattern));
+    setLogisticsError("");
+    setLogisticsStatus("idle");
+    setIsEditingLogistics(false);
+  };
+
+  const handleSaveLogistics = () => {
+    if (logisticsStatus === "saving") return;
+
+    const kg = parseOptionalNonNegativeNumber(logisticsDraft.kg);
+    const eniCm = parseOptionalNonNegativeNumber(logisticsDraft.eniCm);
+    const gramajGm2 = parseOptionalNonNegativeNumber(logisticsDraft.gramajGm2);
+    const fireOrani = parseOptionalNonNegativeNumber(logisticsDraft.fireOrani);
+
+    if (kg === null || eniCm === null || gramajGm2 === null || fireOrani === null) {
+      setLogisticsError("Sayisal alanlar bos veya 0'dan buyuk olmali.");
+      return;
+    }
+    if (typeof fireOrani === "number" && fireOrani > 100) {
+      setLogisticsError("Fire orani 0 ile 100 arasinda olmali.");
+      return;
+    }
+
+    const rawDate = logisticsDraft.createdAt.trim();
+    let createdAt = pattern.createdAt ?? new Date().toISOString();
+    if (rawDate) {
+      const parsed = new Date(`${rawDate}T00:00:00`);
+      if (Number.isNaN(parsed.getTime())) {
+        setLogisticsError("Gecerli bir tarih girin.");
+        return;
+      }
+      createdAt = parsed.toISOString();
+    }
+
+    if (resetLogisticsStatusTimerRef.current) {
+      clearTimeout(resetLogisticsStatusTimerRef.current);
+      resetLogisticsStatusTimerRef.current = null;
+    }
+
+    setLogisticsError("");
+    setLogisticsStatus("saving");
+
+    const patch: Partial<Pattern> = {
+      musteri: logisticsDraft.musteri.trim(),
+      depoNo: logisticsDraft.depoNo.trim(),
+      kg,
+      eniCm,
+      gramajGm2,
+      fireOrani,
+      createdAt,
+    };
+
+    const updated = patternsLocalRepo.update(pattern.id, patch);
+    if (updated) {
+      setLogisticsDraft(createLogisticsDraft(updated));
+      onPatternUpdated?.(updated);
+    }
+
+    setIsEditingLogistics(false);
+    setLogisticsStatus("saved");
+
+    resetLogisticsStatusTimerRef.current = setTimeout(() => {
+      setLogisticsStatus("idle");
+      resetLogisticsStatusTimerRef.current = null;
+    }, 1200);
+  };
+
   const handleArchive = () => {
     if (archiveStatus === "saving") return;
 
@@ -331,7 +627,7 @@ export function PatternDetailPanel({
 
     setArchiveStatus("saving");
 
-    const updated = patternsLocalRepo.update(pattern.id, { archived: true });
+    const updated = patternsLocalRepo.archivePattern(pattern.id);
     onPatternUpdated?.(updated);
     setArchiveStatus("saved");
 
@@ -341,7 +637,7 @@ export function PatternDetailPanel({
     }, 1200);
   };
 
-  const handleUnarchive = () => {
+  const handleRestorePattern = () => {
     if (archiveStatus === "saving") return;
 
     if (resetArchiveStatusTimerRef.current) {
@@ -351,7 +647,7 @@ export function PatternDetailPanel({
 
     setArchiveStatus("saving");
 
-    const updated = patternsLocalRepo.update(pattern.id, { archived: false });
+    const updated = patternsLocalRepo.restorePattern(pattern.id);
     onPatternUpdated?.(updated);
     setArchiveStatus("saved");
 
@@ -361,7 +657,7 @@ export function PatternDetailPanel({
     }, 1200);
   };
 
-  const handlePermanentRemove = () => {
+  const handleDeletePattern = () => {
     if (archiveStatus === "saving") return;
     const accepted = window.confirm("Bu desen kalıcı olarak silinecek. Emin misin?");
     if (!accepted) return;
@@ -372,7 +668,7 @@ export function PatternDetailPanel({
     }
 
     setArchiveStatus("saving");
-    patternsLocalRepo.remove(pattern.id);
+    patternsLocalRepo.deletePattern(pattern.id);
     onPatternUpdated?.();
     setArchiveStatus("saved");
 
@@ -381,6 +677,8 @@ export function PatternDetailPanel({
       resetArchiveStatusTimerRef.current = null;
     }, 1200);
   };
+
+  const showArchivedActions = showArchived && pattern.archived === true;
 
   return (
     <div className="space-y-4 rounded-2xl border border-black/5 bg-white/80 p-6 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
@@ -452,21 +750,21 @@ export function PatternDetailPanel({
           >
             {archiveStatusText || " "}
           </p>
-          {showArchived && pattern.archived ? (
+          {showArchivedActions ? (
             <>
               <button
                 type="button"
-                onClick={handleUnarchive}
+                onClick={handleRestorePattern}
                 className="rounded-lg border border-emerald-500/50 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
               >
-                Arşivden Çıkar
+                Geri Getir
               </button>
               <button
                 type="button"
-                onClick={handlePermanentRemove}
+                onClick={handleDeletePattern}
                 className="rounded-lg border border-red-500/40 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-700 transition hover:bg-red-100"
               >
-                Kalıcı Sil
+                Sil
               </button>
             </>
           ) : (
@@ -534,7 +832,289 @@ export function PatternDetailPanel({
           </SectionBlock>
 
           <SectionBlock title="Varyantlar">
-            <p className="text-sm text-neutral-600">Toplam {variantCount} varyant</p>
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => setIsVariantsOpen((prev) => !prev)}
+                className="flex w-full items-center justify-between rounded-lg border border-black/10 bg-white px-3 py-2 text-left transition hover:border-coffee-primary/40"
+                aria-expanded={isVariantsOpen}
+              >
+                <span className="text-sm text-neutral-700">Toplam {variantCount} varyant</span>
+                <ChevronDown
+                  className={cn("h-4 w-4 text-neutral-500 transition-transform", isVariantsOpen && "rotate-180")}
+                  aria-hidden
+                />
+              </button>
+
+              {isVariantsOpen ? (
+                <>
+                  <div className="flex items-center justify-end">
+                    <button
+                      type="button"
+                      onClick={handleAddVariant}
+                      className="rounded-lg border border-coffee-primary bg-coffee-primary/10 px-3 py-1.5 text-xs font-semibold text-coffee-primary transition hover:border-coffee-primary/70"
+                    >
+                      + Varyant Ekle
+                    </button>
+                  </div>
+
+                  <div className="max-h-[240px] space-y-2 overflow-auto pr-1">
+                    {variantsDraft.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-black/10 bg-coffee-surface px-3 py-2 text-sm text-neutral-500">
+                        Varyant yok
+                      </div>
+                    ) : (
+                      variantsDraft.map((variant) => (
+                        <div
+                          key={variant.id}
+                          className="grid grid-cols-[1fr,1fr,auto] items-center gap-2 rounded-lg border border-black/10 bg-white p-2"
+                        >
+                          <input
+                            type="text"
+                            value={variant.colorName}
+                            onChange={(event) =>
+                              handleVariantFieldChange(variant.id, "colorName", event.target.value)
+                            }
+                            placeholder="Renk adı"
+                            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                          />
+                          <input
+                            type="text"
+                            value={variant.colorCode ?? ""}
+                            onChange={(event) =>
+                              handleVariantFieldChange(variant.id, "colorCode", event.target.value)
+                            }
+                            placeholder="Renk kodu"
+                            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveVariant(variant.id)}
+                            className="rounded-lg border border-red-500/30 bg-red-50 px-2 py-1.5 text-sm font-semibold text-red-700 transition hover:bg-red-100"
+                            aria-label="Varyantı kaldır"
+                          >
+                            x
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <p
+                    className={cn(
+                      "text-xs font-medium",
+                      variantsStatus === "saved"
+                        ? "text-emerald-600"
+                        : variantsStatus === "saving"
+                          ? "text-neutral-500"
+                          : "text-transparent"
+                    )}
+                  >
+                    {variantsStatusText || " "}
+                  </p>
+                </>
+              ) : null}
+            </div>
+          </SectionBlock>
+
+          <SectionBlock title="Lojistik">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-medium text-neutral-700">Lojistik bilgileri</p>
+                {!isEditingLogistics ? (
+                  <button
+                    type="button"
+                    onClick={openLogisticsEditor}
+                    className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-700 transition hover:border-coffee-primary/40"
+                  >
+                    Düzenle
+                  </button>
+                ) : null}
+              </div>
+
+              {isEditingLogistics ? (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="space-y-1 text-sm text-neutral-700">
+                      <span>Müşteri</span>
+                      <input
+                        type="text"
+                        value={logisticsDraft.musteri}
+                        onChange={(event) =>
+                          setLogisticsDraft((prev) => ({ ...prev, musteri: event.target.value }))
+                        }
+                        className={logisticsInputClass}
+                      />
+                    </label>
+                    <label className="space-y-1 text-sm text-neutral-700">
+                      <span>Depo No</span>
+                      <input
+                        type="text"
+                        value={logisticsDraft.depoNo}
+                        onChange={(event) =>
+                          setLogisticsDraft((prev) => ({ ...prev, depoNo: event.target.value }))
+                        }
+                        className={logisticsInputClass}
+                      />
+                    </label>
+                    <label className="space-y-1 text-sm text-neutral-700">
+                      <span>Kg</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={logisticsDraft.kg}
+                        onChange={(event) =>
+                          setLogisticsDraft((prev) => ({ ...prev, kg: event.target.value }))
+                        }
+                        className={logisticsInputClass}
+                      />
+                    </label>
+                    <label className="space-y-1 text-sm text-neutral-700">
+                      <span>Eni (cm)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={logisticsDraft.eniCm}
+                        onChange={(event) =>
+                          setLogisticsDraft((prev) => ({ ...prev, eniCm: event.target.value }))
+                        }
+                        className={logisticsInputClass}
+                      />
+                    </label>
+                    <label className="space-y-1 text-sm text-neutral-700">
+                      <span>Gramaj (g/m²)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={logisticsDraft.gramajGm2}
+                        onChange={(event) =>
+                          setLogisticsDraft((prev) => ({ ...prev, gramajGm2: event.target.value }))
+                        }
+                        className={logisticsInputClass}
+                      />
+                    </label>
+                    <label className="space-y-1 text-sm text-neutral-700">
+                      <span>Fire Oranı (%)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        value={logisticsDraft.fireOrani}
+                        onChange={(event) =>
+                          setLogisticsDraft((prev) => ({ ...prev, fireOrani: event.target.value }))
+                        }
+                        className={logisticsInputClass}
+                      />
+                    </label>
+                    <label className="space-y-1 text-sm text-neutral-700 sm:col-span-2">
+                      <span>Eklendiği Tarih</span>
+                      <input
+                        type="date"
+                        value={logisticsDraft.createdAt}
+                        onChange={(event) =>
+                          setLogisticsDraft((prev) => ({ ...prev, createdAt: event.target.value }))
+                        }
+                        className={logisticsInputClass}
+                      />
+                    </label>
+                  </div>
+
+                  {logisticsError ? <p className="text-sm text-red-600">{logisticsError}</p> : null}
+
+                  <div className="flex items-center justify-end gap-2">
+                    <p
+                      className={cn(
+                        "text-xs font-medium",
+                        logisticsStatus === "saved"
+                          ? "text-emerald-600"
+                          : logisticsStatus === "saving"
+                            ? "text-neutral-500"
+                            : "text-transparent"
+                      )}
+                    >
+                      {logisticsStatusText || " "}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleCancelLogistics}
+                      className="rounded-lg px-3 py-1.5 text-sm text-neutral-600 hover:bg-neutral-100"
+                    >
+                      İptal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveLogistics}
+                      disabled={!canSaveLogistics}
+                      className={cn(
+                        "rounded-lg px-3 py-1.5 text-sm font-semibold transition",
+                        canSaveLogistics
+                          ? "bg-coffee-primary text-white hover:brightness-95"
+                          : "cursor-not-allowed bg-neutral-200 text-neutral-500"
+                      )}
+                    >
+                      Kaydet
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <dl className="grid grid-cols-2 gap-2 text-sm text-neutral-700">
+                  <div>
+                    <dt className="text-xs uppercase tracking-wide text-neutral-500">Müşteri</dt>
+                    <dd className="font-medium text-neutral-900">{formatOptionalText(pattern.musteri)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase tracking-wide text-neutral-500">Depo no</dt>
+                    <dd className="font-medium text-neutral-900">{formatOptionalText(pattern.depoNo)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase tracking-wide text-neutral-500">Kg</dt>
+                    <dd className="font-medium text-neutral-900">{formatOptionalNumber(pattern.kg, "kg")}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase tracking-wide text-neutral-500">Eni</dt>
+                    <dd className="font-medium text-neutral-900">{formatOptionalNumber(pattern.eniCm, "cm")}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase tracking-wide text-neutral-500">Gramaj</dt>
+                    <dd className="font-medium text-neutral-900">
+                      {formatOptionalNumber(pattern.gramajGm2, "g/m²")}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase tracking-wide text-neutral-500">Fire oranı</dt>
+                    <dd className="font-medium text-neutral-900">
+                      {formatOptionalNumber(pattern.fireOrani, "%")}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase tracking-wide text-neutral-500">Eklendiği tarih</dt>
+                    <dd className="font-medium text-neutral-900">{formatCreatedAt(pattern.createdAt)}</dd>
+                  </div>
+                </dl>
+              )}
+
+              <div>
+                <div className="mb-1 text-xs uppercase tracking-wide text-neutral-500">Partiler</div>
+                <div className="flex flex-wrap gap-2">
+                  {(pattern.partiNos ?? []).length === 0 ? (
+                    <span className="text-sm text-neutral-500">-</span>
+                  ) : (
+                    (pattern.partiNos ?? []).map((partiNo) => (
+                      <span
+                        key={partiNo}
+                        className="inline-flex items-center rounded-full border border-black/10 bg-coffee-surface px-2.5 py-1 text-xs font-medium text-neutral-700"
+                      >
+                        {partiNo}
+                      </span>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
           </SectionBlock>
 
           <SectionBlock title="Notlar">
@@ -740,3 +1320,5 @@ function SectionBlock({ title, children }: SectionBlockProps) {
     </div>
   );
 }
+
+

@@ -48,6 +48,7 @@ const isDeletedOverride = (override?: PatternPatch) => !!override?.__deleted;
 const isCompletePattern = (override: PatternPatch): override is Pattern => {
   return (
     !!override &&
+    typeof override.createdAt === "string" &&
     !!override.fabricCode &&
     !!override.fabricName &&
     !!override.weaveType &&
@@ -64,6 +65,24 @@ const isCompletePattern = (override: PatternPatch): override is Pattern => {
 };
 
 const normalizeText = (value: string) => value.trim();
+
+const normalizePartiNos = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+};
+
+const normalizeCreatedAt = (value?: string): string => {
+  if (!value) return new Date().toISOString();
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return new Date().toISOString();
+  return parsed.toISOString();
+};
+
+const withPatternDefaults = (pattern: Pattern): Pattern => ({
+  ...pattern,
+  createdAt: normalizeCreatedAt(pattern.createdAt),
+  partiNos: normalizePartiNos(pattern.partiNos),
+});
 
 const normalizeMeters = (value?: number) => {
   const numeric = Number(value);
@@ -158,7 +177,7 @@ const mergePatterns = (base: Pattern[], overrides: Record<string, PatternPatch>)
     });
   });
 
-  return merged;
+  return merged.map(withPatternDefaults);
 };
 
 const buildNewPattern = (payload: UpsertPatternFromFormPayload): Pattern => {
@@ -166,6 +185,7 @@ const buildNewPattern = (payload: UpsertPatternFromFormPayload): Pattern => {
 
   return {
     id: fabricCode,
+    createdAt: new Date().toISOString(),
     fabricCode,
     fabricName: normalizeText(payload.fabricName),
     weaveType: normalizeText(payload.weaveType),
@@ -173,6 +193,7 @@ const buildNewPattern = (payload: UpsertPatternFromFormPayload): Pattern => {
     weftCount: normalizeText(payload.weftCount),
     totalEnds: normalizeText(payload.totalEnds),
     variants: [],
+    partiNos: [],
     currentStage: payload.currentStage,
     totalProducedMeters: 0,
     stockMeters: 0,
@@ -241,6 +262,7 @@ const upsertWithBaseProvider = (
   const nextPatternBeforeMeters: Pattern = {
     ...nextBase,
     id: fabricCode,
+    createdAt: nextBase.createdAt ?? new Date().toISOString(),
     fabricCode,
     fabricName,
     weaveType,
@@ -253,6 +275,7 @@ const upsertWithBaseProvider = (
     defectMeters: nextBase.defectMeters ?? 0,
     inDyehouseMeters: nextBase.inDyehouseMeters ?? 0,
     variants: nextBase.variants ?? [],
+    partiNos: nextBase.partiNos ?? [],
   };
 
   const nextPattern = incrementMeters(nextPatternBeforeMeters, metersTarget, metersToAdd);
@@ -286,12 +309,12 @@ export const createPatternsLocalRepo = (baseProvider: {
       const currentBase = baseProvider.get(id);
       const currentOverride = overrides[id] ?? {};
 
-      const next: Pattern = {
+      const next = withPatternDefaults({
         ...(currentBase ?? (currentOverride as Pattern)),
         ...currentOverride,
         ...patch,
         id,
-      } as Pattern;
+      } as Pattern);
 
       overrides[id] = next;
       writeOverrides(overrides);
@@ -299,18 +322,27 @@ export const createPatternsLocalRepo = (baseProvider: {
       return this.get(id);
     },
 
+    archivePattern(id: string): Pattern | undefined {
+      return this.update(id, { archived: true });
+    },
+
+    restorePattern(id: string): Pattern | undefined {
+      return this.update(id, { archived: false });
+    },
+
     upsertPatternFromForm(payload: UpsertPatternFromFormPayload): Pattern {
       return upsertWithBaseProvider(baseProvider, payload);
     },
 
     add(pattern: Pattern): Pattern {
+      const nextPattern = withPatternDefaults(pattern);
       const overrides = readOverrides();
-      overrides[pattern.id] = pattern;
+      overrides[nextPattern.id] = nextPattern;
       writeOverrides(overrides);
-      return pattern;
+      return nextPattern;
     },
 
-    remove(id: string): boolean {
+    deletePattern(id: string): boolean {
       const overrides = readOverrides();
       const current = this.list().find((pattern) => pattern.id === id);
       const currentFabricCode = current?.fabricCode;
@@ -332,6 +364,10 @@ export const createPatternsLocalRepo = (baseProvider: {
 
       writeOverrides(overrides);
       return true;
+    },
+
+    remove(id: string): boolean {
+      return this.deletePattern(id);
     },
 
     clear() {

@@ -6,6 +6,8 @@ export type { Pattern } from "@/lib/domain/pattern";
 const buildVariants = (patternId: string, count: number): Variant[] =>
   Array.from({ length: count }, (_, index) => ({
     id: `${patternId}-v${index + 1}`,
+    colorName: `V${index + 1}`,
+    colorCode: "",
     name: `V${index + 1}`,
     active: true,
   }));
@@ -24,6 +26,7 @@ const entry = (
   images?: { digital?: string; final?: string }
 ): Pattern => ({
   id,
+  createdAt: new Date().toISOString(),
   fabricCode,
   fabricName,
   weaveType,
@@ -31,6 +34,7 @@ const entry = (
   weftCount,
   totalEnds,
   variants: buildVariants(id, variantsCount),
+  partiNos: [],
   variantsCount,
   currentStage,
   totalProducedMeters: meters.total,

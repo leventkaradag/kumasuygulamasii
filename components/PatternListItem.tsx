@@ -23,6 +23,8 @@ const fmt = (n: number | null | undefined) => {
 };
 
 export function PatternListItem({ pattern, selected, onSelect }: PatternListItemProps) {
+  const thumb = pattern.finalImageUrl ?? pattern.digitalImageUrl ?? null;
+
   return (
     <button
       type="button"
@@ -36,18 +38,11 @@ export function PatternListItem({ pattern, selected, onSelect }: PatternListItem
       )}
     >
       <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-lg border border-black/5 bg-coffee-accent/20">
-        {pattern.finalImageUrl ? (
+        {thumb ? (
           <img
-            src={pattern.finalImageUrl}
+            src={thumb}
             alt={pattern.fabricName}
-            className="h-full w-full object-cover"
-            loading="lazy"
-          />
-        ) : pattern.digitalImageUrl ? (
-          <img
-            src={pattern.digitalImageUrl}
-            alt={pattern.fabricName}
-            className="h-full w-full object-cover"
+            className="h-12 w-12 rounded-lg object-cover"
             loading="lazy"
           />
         ) : (

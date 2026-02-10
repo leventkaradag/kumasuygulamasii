@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Search } from "lucide-react";
+import { Search, SlidersHorizontal, X } from "lucide-react";
 import Layout from "@/components/Layout";
 import { PatternDetailPanel } from "@/components/PatternDetailPanel";
 import { PatternListItem } from "@/components/PatternListItem";
@@ -27,15 +27,144 @@ const sortPatternsByStage = (items: Pattern[]) =>
 
 const seedPatterns = sortPatternsByStage(patternsRepo.list());
 
-const stageFilters: { label: string; value: Stage | "ALL" }[] = [
+type PatternTab = "ALL" | Stage | "ARCHIVE";
+
+const patternTabs: { label: string; value: PatternTab }[] = [
   { label: "Hepsi", value: "ALL" },
   { label: "Dokuma", value: "DOKUMA" },
   { label: "Boyahane", value: "BOYAHANE" },
   { label: "Depo", value: "DEPO" },
+  { label: "Arşivdekiler", value: "ARCHIVE" },
 ];
+
+type PatternFilters = {
+  partyNo?: string;
+  customer?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  gramajMin?: number;
+  gramajMax?: number;
+  eniMin?: number;
+  eniMax?: number;
+};
+
+type PatternFilterMeta = Pattern &
+  Partial<{
+    customer: string;
+    customerName: string;
+    musteri: string;
+    musteriAdi: string;
+    createdAt: string;
+    gramaj: number | string;
+    eni: number | string;
+  }>;
+
+const normalizeQuery = (query: string) => query.trim().toLocaleLowerCase("tr-TR");
+const normalizeOptionalQuery = (value?: string) => normalizeQuery(value ?? "");
+
+const toFiniteNumber = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return undefined;
+  const parsed = Number(value.trim().replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const toDate = (value?: string): Date | undefined => {
+  if (!value) return undefined;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  return parsed;
+};
+
+const atStartOfDay = (date: Date) => {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
+};
+
+const atEndOfDay = (date: Date) => {
+  const next = new Date(date);
+  next.setHours(23, 59, 59, 999);
+  return next;
+};
+
+const getFilteredPatterns = (
+  items: Pattern[],
+  tab: PatternTab,
+  query: string,
+  filters: PatternFilters
+) => {
+  const normalizedQuery = normalizeQuery(query);
+  const normalizedPartyNo = normalizeOptionalQuery(filters.partyNo);
+  const normalizedCustomer = normalizeOptionalQuery(filters.customer);
+  const fromDate = toDate(filters.dateFrom);
+  const toDateValue = toDate(filters.dateTo);
+  const fromBoundary = fromDate ? atStartOfDay(fromDate) : undefined;
+  const toBoundary = toDateValue ? atEndOfDay(toDateValue) : undefined;
+
+  return items.filter((pattern) => {
+    const meta = pattern as PatternFilterMeta;
+    const matchesTab =
+      tab === "ARCHIVE"
+        ? pattern.archived === true
+        : pattern.archived !== true && (tab === "ALL" || pattern.currentStage === tab);
+
+    if (!matchesTab) return false;
+
+    const matchesSearchPartiNos = (pattern.partiNos ?? []).some((partiNo) =>
+      partiNo.toLocaleLowerCase("tr-TR").includes(normalizedQuery)
+    );
+    const matchesSearch =
+      !normalizedQuery ||
+      pattern.fabricCode.toLocaleLowerCase("tr-TR").includes(normalizedQuery) ||
+      pattern.fabricName.toLocaleLowerCase("tr-TR").includes(normalizedQuery) ||
+      matchesSearchPartiNos;
+    if (!matchesSearch) return false;
+
+    if (normalizedPartyNo) {
+      const hasPartyMatch = (pattern.partiNos ?? []).some((partiNo) =>
+        partiNo.toLocaleLowerCase("tr-TR").includes(normalizedPartyNo)
+      );
+      if (!hasPartyMatch) return false;
+    }
+
+    if (normalizedCustomer) {
+      const customerValue = normalizeOptionalQuery(
+        meta.customer ?? meta.customerName ?? meta.musteri ?? meta.musteriAdi ?? ""
+      );
+      if (!customerValue.includes(normalizedCustomer)) return false;
+    }
+
+    if (fromBoundary || toBoundary) {
+      const createdAt = toDate(meta.createdAt);
+      if (!createdAt) return false;
+      if (fromBoundary && createdAt < fromBoundary) return false;
+      if (toBoundary && createdAt > toBoundary) return false;
+    }
+
+    const gramaj = toFiniteNumber(meta.gramaj);
+    if (typeof filters.gramajMin === "number" && (gramaj === undefined || gramaj < filters.gramajMin)) {
+      return false;
+    }
+    if (typeof filters.gramajMax === "number" && (gramaj === undefined || gramaj > filters.gramajMax)) {
+      return false;
+    }
+
+    const eni = toFiniteNumber(meta.eni);
+    if (typeof filters.eniMin === "number" && (eni === undefined || eni < filters.eniMin)) {
+      return false;
+    }
+    if (typeof filters.eniMax === "number" && (eni === undefined || eni > filters.eniMax)) {
+      return false;
+    }
+
+    return true;
+  });
+};
 
 const emptyPatternForCreate: Pattern = {
   id: "",
+  createdAt: new Date().toISOString(),
   fabricCode: "",
   fabricName: "",
   weaveType: "",
@@ -43,6 +172,9 @@ const emptyPatternForCreate: Pattern = {
   weftCount: "",
   totalEnds: "",
   variants: [],
+  partiNos: [],
+  musteri: "",
+  depoNo: "",
   currentStage: "DEPO",
   totalProducedMeters: 0,
   stockMeters: 0,
@@ -54,8 +186,9 @@ const emptyPatternForCreate: Pattern = {
 export default function DesenlerPage() {
   const [patterns, setPatterns] = useState<Pattern[]>(seedPatterns);
   const [search, setSearch] = useState("");
-  const [stageFilter, setStageFilter] = useState<Stage | "ALL">("ALL");
-  const [showArchived, setShowArchived] = useState(false);
+  const [activeTab, setActiveTab] = useState<PatternTab>("ALL");
+  const [filters, setFilters] = useState<PatternFilters>({});
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string>(seedPatterns[0]?.id ?? "");
   const [showPatternModal, setShowPatternModal] = useState(false);
   const [patternModalMode, setPatternModalMode] = useState<"add" | "edit">("edit");
@@ -64,50 +197,49 @@ export default function DesenlerPage() {
     setPatterns(sortPatternsByStage(patternsLocalRepo.list()));
   }, []);
 
-  const visiblePatterns = useMemo(
-    () => patterns.filter((p) => showArchived || !p.archived),
-    [patterns, showArchived]
+  const filteredPatterns = useMemo(
+    () => getFilteredPatterns(patterns, activeTab, search, filters),
+    [patterns, activeTab, search, filters]
   );
 
   useEffect(() => {
-    if (selectedId && visiblePatterns.some((p) => p.id === selectedId)) return;
-    if (visiblePatterns[0]) {
-      setSelectedId(visiblePatterns[0].id);
-      return;
-    }
-    setSelectedId("");
-  }, [visiblePatterns, selectedId]);
+    if (selectedId && filteredPatterns.some((pattern) => pattern.id === selectedId)) return;
+    setSelectedId(filteredPatterns[0]?.id ?? "");
+  }, [filteredPatterns, selectedId]);
 
-  const filteredPatterns = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return visiblePatterns.filter((p) => {
-      const matchesSearch =
-        !query ||
-        p.fabricCode.toLowerCase().includes(query) ||
-        p.fabricName.toLowerCase().includes(query);
-      const matchesStage = stageFilter === "ALL" || p.currentStage === stageFilter;
-      return matchesSearch && matchesStage;
-    });
-  }, [visiblePatterns, search, stageFilter]);
+  useEffect(() => {
+    if (!isFilterOpen) return;
 
-  const selectedPattern = visiblePatterns.find((p) => p.id === selectedId) ?? null;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsFilterOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isFilterOpen]);
+
+  const selectedPattern = filteredPatterns.find((pattern) => pattern.id === selectedId) ?? null;
   const modalPattern = patternModalMode === "add" ? emptyPatternForCreate : selectedPattern;
 
   const refreshPatterns = (preferredId?: string) => {
     const refreshed = sortPatternsByStage(patternsLocalRepo.list());
     setPatterns(refreshed);
 
-    const refreshedVisible = refreshed.filter((p) => showArchived || !p.archived);
-    if (preferredId && refreshedVisible.some((p) => p.id === preferredId)) {
+    const refreshedFiltered = getFilteredPatterns(refreshed, activeTab, search, filters);
+    if (preferredId && refreshedFiltered.some((pattern) => pattern.id === preferredId)) {
       setSelectedId(preferredId);
       return;
     }
 
-    if (selectedId && refreshedVisible.some((p) => p.id === selectedId)) {
+    if (selectedId && refreshedFiltered.some((pattern) => pattern.id === selectedId)) {
       return;
     }
 
-    setSelectedId(refreshedVisible[0]?.id ?? "");
+    setSelectedId(refreshedFiltered[0]?.id ?? "");
   };
 
   const handlePatternSave = (savedPattern: Pattern) => {
@@ -116,10 +248,22 @@ export default function DesenlerPage() {
 
   const handlePatternUpdated = (updatedPattern?: Pattern) => {
     const preferredId =
-      updatedPattern && (showArchived || !updatedPattern.archived)
+      updatedPattern && getFilteredPatterns([updatedPattern], activeTab, search, filters).length > 0
         ? updatedPattern.id
         : undefined;
     refreshPatterns(preferredId);
+  };
+
+  const handleNumberFilterChange = (
+    key: "gramajMin" | "gramajMax" | "eniMin" | "eniMax",
+    rawValue: string
+  ) => {
+    const trimmed = rawValue.trim();
+    const parsed = Number(trimmed.replace(",", "."));
+    setFilters((prev) => ({
+      ...prev,
+      [key]: trimmed && Number.isFinite(parsed) ? parsed : undefined,
+    }));
   };
 
   const openAddPatternModal = () => {
@@ -135,7 +279,7 @@ export default function DesenlerPage() {
 
   return (
     <Layout title="Desenler">
-      <div className="space-y-4">
+      <div className="flex h-full min-h-0 flex-col gap-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-xl font-semibold text-neutral-900">Desenler</h1>
@@ -157,20 +301,25 @@ export default function DesenlerPage() {
                 />
               </label>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {stageFilters.map(({ label, value }) => {
-                const active =
-                  stageFilter === value && !(value === "ALL" && showArchived);
+            <div className="flex flex-wrap gap-2" role="tablist" aria-label="Desen sekmeleri">
+              {patternTabs.map(({ label, value }) => {
+                const active = activeTab === value;
+                const archiveTab = value === "ARCHIVE";
+
                 return (
                   <button
                     key={value}
                     type="button"
-                    onClick={() => setStageFilter(value)}
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setActiveTab(value)}
                     className={cn(
-                      "rounded-lg border px-3 py-1.5 text-sm font-semibold transition",
+                      "rounded-lg border px-3 py-1.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coffee-primary/60",
                       active
-                        ? "border-coffee-primary bg-coffee-primary/10 text-coffee-primary"
-                        : "border-black/10 bg-white text-neutral-700 hover:border-coffee-primary/40"
+                        ? archiveTab
+                          ? "border-emerald-500/50 bg-emerald-50 text-emerald-700"
+                          : "border-coffee-primary bg-coffee-primary/10 text-coffee-primary"
+                        : "border-black/10 bg-white text-neutral-700 hover:border-coffee-primary/40 hover:bg-white"
                     )}
                   >
                     {label}
@@ -179,15 +328,11 @@ export default function DesenlerPage() {
               })}
               <button
                 type="button"
-                onClick={() => setShowArchived((prev) => !prev)}
-                className={cn(
-                  "rounded-lg border px-3 py-1.5 text-sm font-semibold transition",
-                  showArchived
-                    ? "border-emerald-500/50 bg-emerald-50 text-emerald-700"
-                    : "border-black/10 bg-white text-neutral-700 hover:border-coffee-primary/40"
-                )}
+                onClick={() => setIsFilterOpen(true)}
+                className="inline-flex items-center gap-2 rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm font-semibold text-neutral-700 transition hover:border-coffee-primary/40"
               >
-                Arşivdekiler
+                <SlidersHorizontal className="h-4 w-4" />
+                Filtre
               </button>
               <div className="grow" />
               <button
@@ -214,9 +359,10 @@ export default function DesenlerPage() {
           </div>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-[320px,1fr]">
-          <div className="rounded-2xl border border-black/5 bg-white/80 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <div className="max-h-[70vh] space-y-2 overflow-auto pr-1">
+        <div className="min-h-0 h-[calc(100vh-220px)]">
+          <div className="min-h-0 h-full grid gap-6 md:grid-cols-[320px,1fr]">
+          <div className="min-h-0 h-full overflow-auto rounded-2xl border border-black/5 bg-white/80 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className="space-y-2 pr-1">
               {filteredPatterns.map((pattern) => (
                 <PatternListItem
                   key={pattern.id}
@@ -233,11 +379,14 @@ export default function DesenlerPage() {
             </div>
           </div>
 
-          <PatternDetailPanel
-            pattern={selectedPattern}
-            onPatternUpdated={handlePatternUpdated}
-            showArchived={showArchived}
-          />
+          <div className="min-h-0 h-full overflow-auto md:pr-1">
+            <PatternDetailPanel
+              pattern={selectedPattern}
+              onPatternUpdated={handlePatternUpdated}
+              showArchived={activeTab === "ARCHIVE"}
+            />
+          </div>
+          </div>
         </div>
 
         {showPatternModal && modalPattern && (
@@ -247,7 +396,171 @@ export default function DesenlerPage() {
             onSave={handlePatternSave}
           />
         )}
+
+        {isFilterOpen && (
+          <div
+            className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
+            onClick={() => setIsFilterOpen(false)}
+          >
+            <div
+              className="w-full max-w-md rounded-2xl border border-black/10 bg-white shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex max-h-[80vh] flex-col">
+            <div className="flex items-center justify-between border-b border-black/10 px-4 py-3">
+              <div>
+                <h2 className="text-sm font-semibold text-neutral-900">Filtreler</h2>
+                <p className="text-xs text-neutral-500">Liste anlık güncellenir</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsFilterOpen(false)}
+                className="rounded-lg border border-black/10 p-1.5 text-neutral-600 transition hover:border-coffee-primary/40"
+                aria-label="Filtre modalını kapat"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 space-y-4 overflow-auto px-4 py-4">
+              <label className="space-y-1 text-sm text-neutral-700">
+                <span>Parti No</span>
+                <input
+                  type="text"
+                  value={filters.partyNo ?? ""}
+                  onChange={(event) =>
+                    setFilters((prev) => ({
+                      ...prev,
+                      partyNo: event.target.value || undefined,
+                    }))
+                  }
+                  placeholder="Parti no filtrele"
+                  className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                />
+              </label>
+
+              <label className="space-y-1 text-sm text-neutral-700">
+                <span>Müşteri</span>
+                <input
+                  type="text"
+                  value={filters.customer ?? ""}
+                  onChange={(event) =>
+                    setFilters((prev) => ({
+                      ...prev,
+                      customer: event.target.value || undefined,
+                    }))
+                  }
+                  placeholder="Müşteri filtrele"
+                  className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                />
+              </label>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="space-y-1 text-sm text-neutral-700">
+                  <span>Tarih Başlangıç</span>
+                  <input
+                    type="date"
+                    value={filters.dateFrom ?? ""}
+                    onChange={(event) =>
+                      setFilters((prev) => ({
+                        ...prev,
+                        dateFrom: event.target.value || undefined,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                  />
+                </label>
+                <label className="space-y-1 text-sm text-neutral-700">
+                  <span>Tarih Bitiş</span>
+                  <input
+                    type="date"
+                    value={filters.dateTo ?? ""}
+                    onChange={(event) =>
+                      setFilters((prev) => ({
+                        ...prev,
+                        dateTo: event.target.value || undefined,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                  />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="space-y-1 text-sm text-neutral-700">
+                  <span>Gramaj Min</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={filters.gramajMin ?? ""}
+                    onChange={(event) => handleNumberFilterChange("gramajMin", event.target.value)}
+                    placeholder="0"
+                    className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                  />
+                </label>
+                <label className="space-y-1 text-sm text-neutral-700">
+                  <span>Gramaj Max</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={filters.gramajMax ?? ""}
+                    onChange={(event) => handleNumberFilterChange("gramajMax", event.target.value)}
+                    placeholder="0"
+                    className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                  />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="space-y-1 text-sm text-neutral-700">
+                  <span>Eni Min</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={filters.eniMin ?? ""}
+                    onChange={(event) => handleNumberFilterChange("eniMin", event.target.value)}
+                    placeholder="0"
+                    className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                  />
+                </label>
+                <label className="space-y-1 text-sm text-neutral-700">
+                  <span>Eni Max</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={filters.eniMax ?? ""}
+                    onChange={(event) => handleNumberFilterChange("eniMax", event.target.value)}
+                    placeholder="0"
+                    className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="border-t border-black/10 px-4 py-3">
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setFilters({})}
+                  className="rounded-lg border border-coffee-primary bg-coffee-primary/10 px-3 py-2 text-sm font-semibold text-coffee-primary transition hover:border-coffee-primary/70"
+                >
+                  Filtreleri Temizle
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsFilterOpen(false)}
+                  className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-semibold text-neutral-700 transition hover:border-coffee-primary/40"
+                >
+                  Kapat
+                </button>
+              </div>
+            </div>
+          </div>
+            </div>
+          </div>
+        )}
       </div>
     </Layout>
   );
 }
+

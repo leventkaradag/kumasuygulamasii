@@ -61,7 +61,7 @@ export default function Layout({ title, children }) {
   };
 
   return (
-    <div ref={rootRef} className="page-shell relative min-h-screen text-neutral-900">
+    <div ref={rootRef} className="page-shell relative flex min-h-screen flex-col text-neutral-900">
       <div className="pointer-events-none absolute inset-0 -z-10">
         <div
           data-anim="orb"
@@ -135,7 +135,7 @@ export default function Layout({ title, children }) {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl px-6 pb-16 pt-10">
+      <main className="mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col px-6 pb-16 pt-10">
         <div data-anim="hero" className="mb-6 space-y-2">
           <div className="text-xs uppercase tracking-[0.3em] text-neutral-500">Kumasci Studio</div>
           <h1 className="font-display text-3xl font-semibold text-neutral-900 md:text-4xl">
@@ -148,9 +148,9 @@ export default function Layout({ title, children }) {
 
         <section
           data-anim="panel"
-          className="rounded-[28px] border border-black/5 bg-white/80 p-6 shadow-[0_20px_50px_rgba(0,0,0,0.12)] backdrop-blur"
+          className="flex min-h-0 flex-1 flex-col rounded-[28px] border border-black/5 bg-white/80 p-6 shadow-[0_20px_50px_rgba(0,0,0,0.12)] backdrop-blur"
         >
-          {children}
+          <div className="h-full min-h-0 overflow-hidden">{children}</div>
         </section>
       </main>
     </div>

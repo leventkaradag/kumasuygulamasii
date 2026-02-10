@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "../lib/cn";
 
 type AccordionProps = {
@@ -13,6 +13,30 @@ type AccordionProps = {
 
 export function Accordion({ title, children, defaultOpen = false }: AccordionProps) {
   const [open, setOpen] = useState(defaultOpen);
+  const [contentHeight, setContentHeight] = useState(0);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const contentEl = contentRef.current;
+    if (!contentEl) return;
+
+    const syncHeight = () => {
+      setContentHeight(contentEl.scrollHeight);
+    };
+
+    syncHeight();
+
+    const observer = new ResizeObserver(() => {
+      syncHeight();
+    });
+    observer.observe(contentEl);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [open, children]);
 
   return (
     <div className="rounded-xl border border-black/5 bg-white/80 shadow-[0_6px_14px_rgba(0,0,0,0.04)]">
@@ -33,13 +57,14 @@ export function Accordion({ title, children, defaultOpen = false }: AccordionPro
       <div
         className={cn(
           "overflow-hidden px-4 pb-4 transition-[max-height,opacity,transform]",
-          open
-            ? "max-h-[500px] opacity-100 translate-y-0"
-            : "max-h-0 opacity-0 -translate-y-1"
+          open ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-1"
         )}
+        style={{ maxHeight: open ? `${contentHeight}px` : "0px" }}
         aria-hidden={!open}
       >
-        {open && <div className="pt-1 text-sm text-neutral-700">{children}</div>}
+        <div ref={contentRef} className="pt-1 text-sm text-neutral-700">
+          {children}
+        </div>
       </div>
     </div>
   );
