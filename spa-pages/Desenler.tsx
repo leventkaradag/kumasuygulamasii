@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import Layout from "@/components/Layout";
 import { PatternDetailPanel } from "@/components/PatternDetailPanel";
@@ -12,7 +12,20 @@ import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
 import { patternsRepo } from "@/lib/repos/patternsRepo";
 import { cn } from "@/lib/cn";
 
-const seedPatterns = patternsRepo.list();
+const stageOrder: Record<Stage, number> = {
+  DOKUMA: 0,
+  BOYAHANE: 1,
+  DEPO: 2,
+};
+
+const sortPatternsByStage = (items: Pattern[]) =>
+  [...items].sort((a, b) => {
+    const stageDiff = stageOrder[a.currentStage] - stageOrder[b.currentStage];
+    if (stageDiff !== 0) return stageDiff;
+    return a.fabricCode.localeCompare(b.fabricCode, "tr-TR");
+  });
+
+const seedPatterns = sortPatternsByStage(patternsRepo.list());
 
 const stageFilters: { label: string; value: Stage | "ALL" }[] = [
   { label: "Hepsi", value: "ALL" },
@@ -21,26 +34,53 @@ const stageFilters: { label: string; value: Stage | "ALL" }[] = [
   { label: "Depo", value: "DEPO" },
 ];
 
+const emptyPatternForCreate: Pattern = {
+  id: "",
+  fabricCode: "",
+  fabricName: "",
+  weaveType: "",
+  warpCount: "",
+  weftCount: "",
+  totalEnds: "",
+  variants: [],
+  currentStage: "DEPO",
+  totalProducedMeters: 0,
+  stockMeters: 0,
+  defectMeters: 0,
+  inDyehouseMeters: 0,
+  note: "",
+};
+
 export default function DesenlerPage() {
   const [patterns, setPatterns] = useState<Pattern[]>(seedPatterns);
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState<Stage | "ALL">("ALL");
+  const [showArchived, setShowArchived] = useState(false);
   const [selectedId, setSelectedId] = useState<string>(seedPatterns[0]?.id ?? "");
   const [showPatternModal, setShowPatternModal] = useState(false);
-  const objectUrlsRef = useRef<Record<string, { digital?: string; final?: string }>>({});
+  const [patternModalMode, setPatternModalMode] = useState<"add" | "edit">("edit");
 
   useEffect(() => {
-    setPatterns(patternsLocalRepo.list());
+    setPatterns(sortPatternsByStage(patternsLocalRepo.list()));
   }, []);
 
+  const visiblePatterns = useMemo(
+    () => patterns.filter((p) => showArchived || !p.archived),
+    [patterns, showArchived]
+  );
+
   useEffect(() => {
-    if (selectedId && patterns.some((p) => p.id === selectedId)) return;
-    if (patterns[0]) setSelectedId(patterns[0].id);
-  }, [patterns, selectedId]);
+    if (selectedId && visiblePatterns.some((p) => p.id === selectedId)) return;
+    if (visiblePatterns[0]) {
+      setSelectedId(visiblePatterns[0].id);
+      return;
+    }
+    setSelectedId("");
+  }, [visiblePatterns, selectedId]);
 
   const filteredPatterns = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return patterns.filter((p) => {
+    return visiblePatterns.filter((p) => {
       const matchesSearch =
         !query ||
         p.fabricCode.toLowerCase().includes(query) ||
@@ -48,50 +88,50 @@ export default function DesenlerPage() {
       const matchesStage = stageFilter === "ALL" || p.currentStage === stageFilter;
       return matchesSearch && matchesStage;
     });
-  }, [patterns, search, stageFilter]);
+  }, [visiblePatterns, search, stageFilter]);
 
-  const selectedPattern = patterns.find((p) => p.id === selectedId) ?? null;
+  const selectedPattern = visiblePatterns.find((p) => p.id === selectedId) ?? null;
+  const modalPattern = patternModalMode === "add" ? emptyPatternForCreate : selectedPattern;
 
-  const handlePatternSave = (
-    fields: Pick<Pattern, "fabricCode" | "fabricName" | "weaveType" | "warpCount" | "weftCount" | "totalEnds">
-  ) => {
+  const refreshPatterns = (preferredId?: string) => {
+    const refreshed = sortPatternsByStage(patternsLocalRepo.list());
+    setPatterns(refreshed);
+
+    const refreshedVisible = refreshed.filter((p) => showArchived || !p.archived);
+    if (preferredId && refreshedVisible.some((p) => p.id === preferredId)) {
+      setSelectedId(preferredId);
+      return;
+    }
+
+    if (selectedId && refreshedVisible.some((p) => p.id === selectedId)) {
+      return;
+    }
+
+    setSelectedId(refreshedVisible[0]?.id ?? "");
+  };
+
+  const handlePatternSave = (savedPattern: Pattern) => {
+    refreshPatterns(savedPattern.id);
+  };
+
+  const handlePatternUpdated = (updatedPattern?: Pattern) => {
+    const preferredId =
+      updatedPattern && (showArchived || !updatedPattern.archived)
+        ? updatedPattern.id
+        : undefined;
+    refreshPatterns(preferredId);
+  };
+
+  const openAddPatternModal = () => {
+    setPatternModalMode("add");
+    setShowPatternModal(true);
+  };
+
+  const openEditPatternModal = () => {
     if (!selectedPattern) return;
-    patternsLocalRepo.update(selectedPattern.id, fields);
-    setPatterns((prev) => prev.map((p) => (p.id === selectedPattern.id ? { ...p, ...fields } : p)));
+    setPatternModalMode("edit");
+    setShowPatternModal(true);
   };
-
-  const assignUrl = (type: "digital" | "final", file?: File) => {
-    if (!file || !selectedId) return;
-    const newUrl = URL.createObjectURL(file);
-    const existing = objectUrlsRef.current[selectedId]?.[type];
-    if (existing) URL.revokeObjectURL(existing);
-
-    objectUrlsRef.current[selectedId] = {
-      ...objectUrlsRef.current[selectedId],
-      [type]: newUrl,
-    };
-
-    setPatterns((prev) =>
-      prev.map((p) =>
-        p.id === selectedId
-          ? {
-              ...p,
-              ...(type === "digital" ? { digitalImageUrl: newUrl } : { finalImageUrl: newUrl }),
-            }
-          : p
-      )
-    );
-  };
-
-  useEffect(
-    () => () => {
-      Object.values(objectUrlsRef.current).forEach((entry) => {
-        if (entry.digital) URL.revokeObjectURL(entry.digital);
-        if (entry.final) URL.revokeObjectURL(entry.final);
-      });
-    },
-    []
-  );
 
   return (
     <Layout title="Desenler">
@@ -119,7 +159,8 @@ export default function DesenlerPage() {
             </div>
             <div className="flex flex-wrap gap-2">
               {stageFilters.map(({ label, value }) => {
-                const active = stageFilter === value;
+                const active =
+                  stageFilter === value && !(value === "ALL" && showArchived);
                 return (
                   <button
                     key={value}
@@ -136,11 +177,30 @@ export default function DesenlerPage() {
                   </button>
                 );
               })}
+              <button
+                type="button"
+                onClick={() => setShowArchived((prev) => !prev)}
+                className={cn(
+                  "rounded-lg border px-3 py-1.5 text-sm font-semibold transition",
+                  showArchived
+                    ? "border-emerald-500/50 bg-emerald-50 text-emerald-700"
+                    : "border-black/10 bg-white text-neutral-700 hover:border-coffee-primary/40"
+                )}
+              >
+                Arşivdekiler
+              </button>
               <div className="grow" />
               <button
                 type="button"
+                onClick={openAddPatternModal}
+                className="rounded-lg border border-coffee-primary bg-coffee-primary/10 px-3 py-1.5 text-sm font-semibold text-coffee-primary transition hover:border-coffee-primary/70"
+              >
+                + Desen Ekle
+              </button>
+              <button
+                type="button"
                 disabled={!selectedPattern}
-                onClick={() => setShowPatternModal(true)}
+                onClick={openEditPatternModal}
                 className={cn(
                   "rounded-lg border px-3 py-1.5 text-sm font-semibold transition",
                   selectedPattern
@@ -175,14 +235,14 @@ export default function DesenlerPage() {
 
           <PatternDetailPanel
             pattern={selectedPattern}
-            onSelectDigital={(file) => assignUrl("digital", file)}
-            onSelectFinal={(file) => assignUrl("final", file)}
+            onPatternUpdated={handlePatternUpdated}
+            showArchived={showArchived}
           />
         </div>
 
-        {showPatternModal && selectedPattern && (
+        {showPatternModal && modalPattern && (
           <PatternModal
-            pattern={selectedPattern}
+            pattern={modalPattern}
             onClose={() => setShowPatternModal(false)}
             onSave={handlePatternSave}
           />

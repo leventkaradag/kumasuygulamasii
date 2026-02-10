@@ -22,5 +22,7 @@ export type Pattern = {
   inDyehouseMeters: number;
   digitalImageUrl?: string;
   finalImageUrl?: string;
+  note?: string;
+  archived?: boolean;
   variantsCount?: number;
 };

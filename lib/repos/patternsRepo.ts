@@ -1,3 +1,5 @@
+"use client";
+
 import { Pattern } from "@/lib/domain/pattern";
 import { PATTERNS } from "@/mock/patterns";
 

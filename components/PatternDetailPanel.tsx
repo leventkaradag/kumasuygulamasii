@@ -1,17 +1,23 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Image as ImageIcon, ImageOff, Layers, Package, Palette, Sparkles } from "lucide-react";
 import { Accordion } from "@/components/Accordion";
 import { ImagePicker } from "@/components/ImagePicker";
-import type { Pattern } from "@/mock/patterns";
 import { cn } from "@/lib/cn";
+import type { Pattern } from "@/lib/domain/pattern";
+import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
 
 type PatternDetailPanelProps = {
   pattern: Pattern | null;
-  onSelectDigital: (file?: File) => void;
-  onSelectFinal: (file?: File) => void;
+  onPatternUpdated?: (pattern?: Pattern) => void;
+  showArchived?: boolean;
 };
+
+type MeterFields = Pick<
+  Pattern,
+  "totalProducedMeters" | "stockMeters" | "inDyehouseMeters" | "defectMeters"
+>;
 
 const stageLabel: Record<string, string> = {
   DEPO: "Depo",
@@ -19,7 +25,122 @@ const stageLabel: Record<string, string> = {
   DOKUMA: "Dokuma",
 };
 
-export function PatternDetailPanel({ pattern, onSelectDigital, onSelectFinal }: PatternDetailPanelProps) {
+const fileToDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error("Dosya okunamadi"));
+    };
+    reader.onerror = () => reject(new Error("Dosya okunamadi"));
+    reader.readAsDataURL(file);
+  });
+
+export function PatternDetailPanel({
+  pattern,
+  onPatternUpdated,
+  showArchived = false,
+}: PatternDetailPanelProps) {
+  const [note, setNote] = useState("");
+  const [savedNote, setSavedNote] = useState("");
+  const [noteStatus, setNoteStatus] = useState<"idle" | "saving" | "saved">("idle");
+
+  const [savedDigitalUrl, setSavedDigitalUrl] = useState<string | undefined>(undefined);
+  const [savedFinalUrl, setSavedFinalUrl] = useState<string | undefined>(undefined);
+  const [pendingDigitalUrl, setPendingDigitalUrl] = useState<string | undefined>(undefined);
+  const [pendingFinalUrl, setPendingFinalUrl] = useState<string | undefined>(undefined);
+  const [imageStatus, setImageStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const [metersStatus, setMetersStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const [archiveStatus, setArchiveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const [showMetersModal, setShowMetersModal] = useState(false);
+  const [metersError, setMetersError] = useState("");
+  const [savedMeters, setSavedMeters] = useState<MeterFields>({
+    totalProducedMeters: 0,
+    stockMeters: 0,
+    inDyehouseMeters: 0,
+    defectMeters: 0,
+  });
+  const [metersDraft, setMetersDraft] = useState<Record<keyof MeterFields, string>>({
+    totalProducedMeters: "0",
+    stockMeters: "0",
+    inDyehouseMeters: "0",
+    defectMeters: "0",
+  });
+
+  const resetNoteStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resetImageStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resetMetersStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resetArchiveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const latestPattern = pattern ? patternsLocalRepo.get(pattern.id) ?? pattern : null;
+
+    const initialNote = latestPattern?.note ?? "";
+    setNote(initialNote);
+    setSavedNote(initialNote);
+    setNoteStatus("idle");
+
+    setSavedDigitalUrl(latestPattern?.digitalImageUrl);
+    setSavedFinalUrl(latestPattern?.finalImageUrl);
+    setPendingDigitalUrl(undefined);
+    setPendingFinalUrl(undefined);
+    setImageStatus("idle");
+    setMetersStatus("idle");
+    setArchiveStatus("idle");
+    setShowMetersModal(false);
+    setMetersError("");
+    setSavedMeters({
+      totalProducedMeters: latestPattern?.totalProducedMeters ?? 0,
+      stockMeters: latestPattern?.stockMeters ?? 0,
+      inDyehouseMeters: latestPattern?.inDyehouseMeters ?? 0,
+      defectMeters: latestPattern?.defectMeters ?? 0,
+    });
+    setMetersDraft({
+      totalProducedMeters: String(latestPattern?.totalProducedMeters ?? 0),
+      stockMeters: String(latestPattern?.stockMeters ?? 0),
+      inDyehouseMeters: String(latestPattern?.inDyehouseMeters ?? 0),
+      defectMeters: String(latestPattern?.defectMeters ?? 0),
+    });
+
+    if (resetNoteStatusTimerRef.current) {
+      clearTimeout(resetNoteStatusTimerRef.current);
+      resetNoteStatusTimerRef.current = null;
+    }
+
+    if (resetImageStatusTimerRef.current) {
+      clearTimeout(resetImageStatusTimerRef.current);
+      resetImageStatusTimerRef.current = null;
+    }
+    if (resetMetersStatusTimerRef.current) {
+      clearTimeout(resetMetersStatusTimerRef.current);
+      resetMetersStatusTimerRef.current = null;
+    }
+    if (resetArchiveStatusTimerRef.current) {
+      clearTimeout(resetArchiveStatusTimerRef.current);
+      resetArchiveStatusTimerRef.current = null;
+    }
+  }, [pattern?.id]);
+
+  useEffect(() => {
+    return () => {
+      if (resetNoteStatusTimerRef.current) {
+        clearTimeout(resetNoteStatusTimerRef.current);
+      }
+      if (resetImageStatusTimerRef.current) {
+        clearTimeout(resetImageStatusTimerRef.current);
+      }
+      if (resetMetersStatusTimerRef.current) {
+        clearTimeout(resetMetersStatusTimerRef.current);
+      }
+      if (resetArchiveStatusTimerRef.current) {
+        clearTimeout(resetArchiveStatusTimerRef.current);
+      }
+    };
+  }, []);
+
   if (!pattern) {
     return (
       <div className="rounded-2xl border border-black/5 bg-white/80 p-6 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
@@ -33,21 +154,279 @@ export function PatternDetailPanel({ pattern, onSelectDigital, onSelectFinal }: 
 
   const variantCount = pattern.variants?.length ?? 0;
 
+  const hasNoteChanges = note.trim() !== savedNote.trim();
+  const canSaveNote = hasNoteChanges && noteStatus !== "saving";
+  const noteStatusText =
+    noteStatus === "saving"
+      ? "Kaydediliyor..."
+      : noteStatus === "saved"
+        ? "Kaydedildi ✅"
+        : hasNoteChanges
+          ? "Değişiklik var"
+          : "";
+
+  const hasPendingImageChanges = !!pendingDigitalUrl || !!pendingFinalUrl;
+  const canSaveImages = hasPendingImageChanges && imageStatus !== "saving";
+  const imageStatusText =
+    imageStatus === "saving"
+      ? "Kaydediliyor..."
+      : imageStatus === "saved"
+        ? "Kaydedildi ✅"
+        : hasPendingImageChanges
+          ? "Değişiklik var"
+          : "";
+
+  const metersStatusText =
+    metersStatus === "saving"
+      ? "Kaydediliyor..."
+      : metersStatus === "saved"
+        ? "Kaydedildi ✅"
+        : "";
+
+  const archiveStatusText =
+    archiveStatus === "saving"
+      ? "Kaydediliyor..."
+      : archiveStatus === "saved"
+        ? "Kaydedildi ✅"
+        : "";
+
+  const handleSaveNote = () => {
+    if (!canSaveNote) return;
+
+    if (resetNoteStatusTimerRef.current) {
+      clearTimeout(resetNoteStatusTimerRef.current);
+      resetNoteStatusTimerRef.current = null;
+    }
+
+    setNoteStatus("saving");
+
+    const nextNote = note.trim();
+    patternsLocalRepo.update(pattern.id, { note: nextNote });
+    setNote(nextNote);
+    setSavedNote(nextNote);
+    setNoteStatus("saved");
+
+    resetNoteStatusTimerRef.current = setTimeout(() => {
+      setNoteStatus("idle");
+      resetNoteStatusTimerRef.current = null;
+    }, 1200);
+  };
+
+  const handlePickDigital = async (file?: File) => {
+    if (!file) return;
+    const dataUrl = await fileToDataUrl(file);
+    setPendingDigitalUrl(dataUrl);
+    setImageStatus("idle");
+  };
+
+  const handlePickFinal = async (file?: File) => {
+    if (!file) return;
+    const dataUrl = await fileToDataUrl(file);
+    setPendingFinalUrl(dataUrl);
+    setImageStatus("idle");
+  };
+
+  const handleSaveImages = () => {
+    if (!canSaveImages) return;
+
+    if (resetImageStatusTimerRef.current) {
+      clearTimeout(resetImageStatusTimerRef.current);
+      resetImageStatusTimerRef.current = null;
+    }
+
+    setImageStatus("saving");
+
+    const patch: Partial<Pattern> = {};
+    if (pendingDigitalUrl) {
+      patch.digitalImageUrl = pendingDigitalUrl;
+    }
+    if (pendingFinalUrl) {
+      patch.finalImageUrl = pendingFinalUrl;
+    }
+
+    const updated = patternsLocalRepo.update(pattern.id, patch);
+    setSavedDigitalUrl(updated?.digitalImageUrl ?? savedDigitalUrl);
+    setSavedFinalUrl(updated?.finalImageUrl ?? savedFinalUrl);
+    setPendingDigitalUrl(undefined);
+    setPendingFinalUrl(undefined);
+    setImageStatus("saved");
+
+    resetImageStatusTimerRef.current = setTimeout(() => {
+      setImageStatus("idle");
+      resetImageStatusTimerRef.current = null;
+    }, 1200);
+  };
+
+  const fmtMeters = (value: number) => (Number.isFinite(value) ? value.toLocaleString("tr-TR") : "0");
+
+  const openMetersModal = () => {
+    setMetersDraft({
+      totalProducedMeters: String(savedMeters.totalProducedMeters),
+      stockMeters: String(savedMeters.stockMeters),
+      inDyehouseMeters: String(savedMeters.inDyehouseMeters),
+      defectMeters: String(savedMeters.defectMeters),
+    });
+    setMetersError("");
+    setShowMetersModal(true);
+  };
+
+  const parseMeterField = (field: keyof MeterFields): number | null => {
+    const raw = metersDraft[field].trim();
+    const parsed = Number(raw.replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed < 0) return null;
+    return parsed;
+  };
+
+  const handleSaveMeters = () => {
+    if (metersStatus === "saving") return;
+
+    const totalProducedMeters = parseMeterField("totalProducedMeters");
+    const stockMeters = parseMeterField("stockMeters");
+    const inDyehouseMeters = parseMeterField("inDyehouseMeters");
+    const defectMeters = parseMeterField("defectMeters");
+
+    if (
+      totalProducedMeters === null ||
+      stockMeters === null ||
+      inDyehouseMeters === null ||
+      defectMeters === null
+    ) {
+      setMetersError("Metre alanları 0 veya daha büyük bir sayı olmalı.");
+      return;
+    }
+
+    if (resetMetersStatusTimerRef.current) {
+      clearTimeout(resetMetersStatusTimerRef.current);
+      resetMetersStatusTimerRef.current = null;
+    }
+
+    setMetersError("");
+    setMetersStatus("saving");
+
+    const patch: MeterFields = {
+      totalProducedMeters,
+      stockMeters,
+      inDyehouseMeters,
+      defectMeters,
+    };
+
+    patternsLocalRepo.update(pattern.id, patch);
+    setSavedMeters(patch);
+    setMetersStatus("saved");
+    setShowMetersModal(false);
+
+    resetMetersStatusTimerRef.current = setTimeout(() => {
+      setMetersStatus("idle");
+      resetMetersStatusTimerRef.current = null;
+    }, 1200);
+  };
+
+  const handleArchive = () => {
+    if (archiveStatus === "saving") return;
+
+    if (resetArchiveStatusTimerRef.current) {
+      clearTimeout(resetArchiveStatusTimerRef.current);
+      resetArchiveStatusTimerRef.current = null;
+    }
+
+    setArchiveStatus("saving");
+
+    const updated = patternsLocalRepo.update(pattern.id, { archived: true });
+    onPatternUpdated?.(updated);
+    setArchiveStatus("saved");
+
+    resetArchiveStatusTimerRef.current = setTimeout(() => {
+      setArchiveStatus("idle");
+      resetArchiveStatusTimerRef.current = null;
+    }, 1200);
+  };
+
+  const handleUnarchive = () => {
+    if (archiveStatus === "saving") return;
+
+    if (resetArchiveStatusTimerRef.current) {
+      clearTimeout(resetArchiveStatusTimerRef.current);
+      resetArchiveStatusTimerRef.current = null;
+    }
+
+    setArchiveStatus("saving");
+
+    const updated = patternsLocalRepo.update(pattern.id, { archived: false });
+    onPatternUpdated?.(updated);
+    setArchiveStatus("saved");
+
+    resetArchiveStatusTimerRef.current = setTimeout(() => {
+      setArchiveStatus("idle");
+      resetArchiveStatusTimerRef.current = null;
+    }, 1200);
+  };
+
+  const handlePermanentRemove = () => {
+    if (archiveStatus === "saving") return;
+    const accepted = window.confirm("Bu desen kalıcı olarak silinecek. Emin misin?");
+    if (!accepted) return;
+
+    if (resetArchiveStatusTimerRef.current) {
+      clearTimeout(resetArchiveStatusTimerRef.current);
+      resetArchiveStatusTimerRef.current = null;
+    }
+
+    setArchiveStatus("saving");
+    patternsLocalRepo.remove(pattern.id);
+    onPatternUpdated?.();
+    setArchiveStatus("saved");
+
+    resetArchiveStatusTimerRef.current = setTimeout(() => {
+      setArchiveStatus("idle");
+      resetArchiveStatusTimerRef.current = null;
+    }, 1200);
+  };
+
   return (
     <div className="space-y-4 rounded-2xl border border-black/5 bg-white/80 p-6 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <ImageCard
-          title="Dijital Görsel"
-          imageUrl={pattern.digitalImageUrl}
-          placeholderIcon={<Sparkles className="h-10 w-10 text-coffee-primary" aria-hidden />}
-          onPick={onSelectDigital}
-        />
-        <ImageCard
-          title="Final Görsel"
-          imageUrl={pattern.finalImageUrl}
-          placeholderIcon={<ImageIcon className="h-10 w-10 text-coffee-primary" aria-hidden />}
-          onPick={onSelectFinal}
-        />
+      <div className="space-y-2">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <ImageCard
+            title="Dijital Görsel"
+            imageUrl={pendingDigitalUrl ?? savedDigitalUrl}
+            placeholderIcon={<Sparkles className="h-10 w-10 text-coffee-primary" aria-hidden />}
+            onPick={handlePickDigital}
+          />
+          <ImageCard
+            title="Final Görsel"
+            imageUrl={pendingFinalUrl ?? savedFinalUrl}
+            placeholderIcon={<ImageIcon className="h-10 w-10 text-coffee-primary" aria-hidden />}
+            onPick={handlePickFinal}
+          />
+        </div>
+
+        <div className="flex items-center justify-end gap-3">
+          <p
+            className={cn(
+              "text-xs font-medium",
+              imageStatus === "saved"
+                ? "text-emerald-600"
+                : imageStatus === "saving" || hasPendingImageChanges
+                  ? "text-neutral-500"
+                  : "text-transparent"
+            )}
+          >
+            {imageStatusText || " "}
+          </p>
+          <button
+            type="button"
+            onClick={handleSaveImages}
+            disabled={!canSaveImages}
+            className={cn(
+              "rounded-lg px-3 py-1.5 text-sm font-semibold transition",
+              canSaveImages
+                ? "bg-coffee-primary text-white hover:brightness-95"
+                : "cursor-not-allowed bg-neutral-200 text-neutral-500"
+            )}
+          >
+            Görselleri Kaydet
+          </button>
+        </div>
       </div>
 
       <div className="flex items-center justify-between gap-3">
@@ -60,13 +439,75 @@ export function PatternDetailPanel({ pattern, onSelectDigital, onSelectFinal }: 
             {stageLabel[pattern.currentStage] ?? pattern.currentStage}
           </div>
         </div>
+        <div className="flex items-center gap-2">
+          <p
+            className={cn(
+              "text-xs font-medium",
+              archiveStatus === "saved"
+                ? "text-emerald-600"
+                : archiveStatus === "saving"
+                  ? "text-neutral-500"
+                  : "text-transparent"
+            )}
+          >
+            {archiveStatusText || " "}
+          </p>
+          {showArchived && pattern.archived ? (
+            <>
+              <button
+                type="button"
+                onClick={handleUnarchive}
+                className="rounded-lg border border-emerald-500/50 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+              >
+                Arşivden Çıkar
+              </button>
+              <button
+                type="button"
+                onClick={handlePermanentRemove}
+                className="rounded-lg border border-red-500/40 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-700 transition hover:bg-red-100"
+              >
+                Kalıcı Sil
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={handleArchive}
+              className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm font-semibold text-neutral-700 transition hover:border-coffee-primary/40"
+            >
+              Kaldır
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-4">
-        <StatCard icon={<Package className="h-4 w-4" />} label="Üretim" value={`${pattern.totalProducedMeters} m`} />
-        <StatCard icon={<Package className="h-4 w-4" />} label="Stok" value={`${pattern.stockMeters} m`} />
-        <StatCard icon={<Palette className="h-4 w-4" />} label="Boyahane" value={`${pattern.inDyehouseMeters} m`} />
-        <StatCard icon={<Layers className="h-4 w-4" />} label="Hatalı" value={`${pattern.defectMeters} m`} />
+        <StatCard icon={<Package className="h-4 w-4" />} label="Üretim" value={`${fmtMeters(savedMeters.totalProducedMeters)} m`} />
+        <StatCard icon={<Package className="h-4 w-4" />} label="Stok" value={`${fmtMeters(savedMeters.stockMeters)} m`} />
+        <StatCard icon={<Palette className="h-4 w-4" />} label="Boyahane" value={`${fmtMeters(savedMeters.inDyehouseMeters)} m`} />
+        <StatCard icon={<Layers className="h-4 w-4" />} label="Hatalı" value={`${fmtMeters(savedMeters.defectMeters)} m`} />
+      </div>
+
+      <div className="flex items-center justify-end gap-3">
+        <p
+          className={cn(
+            "text-xs font-medium",
+            metersStatus === "saved"
+              ? "text-emerald-600"
+              : metersStatus === "saving"
+                ? "text-neutral-500"
+                : "text-transparent"
+          )}
+        >
+          {metersStatusText || " "}
+        </p>
+        <button
+          type="button"
+          onClick={openMetersModal}
+          className="rounded-lg bg-coffee-primary px-3 py-1.5 text-sm font-semibold text-white transition hover:brightness-95"
+        >
+          Metreleri Düzenle
+        </button>
       </div>
 
       <Accordion title="Detaylar" defaultOpen={false}>
@@ -97,11 +538,42 @@ export function PatternDetailPanel({ pattern, onSelectDigital, onSelectFinal }: 
           </SectionBlock>
 
           <SectionBlock title="Notlar">
-            <textarea
-              placeholder="Not ekle (placeholder)"
-              className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-800 shadow-[0_4px_10px_rgba(0,0,0,0.04)] focus:border-coffee-primary focus:outline-none focus:ring-1 focus:ring-coffee-primary"
-              rows={3}
-            />
+            <div className="space-y-2">
+              <textarea
+                placeholder="Not ekle"
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-800 shadow-[0_4px_10px_rgba(0,0,0,0.04)] focus:border-coffee-primary focus:outline-none focus:ring-1 focus:ring-coffee-primary"
+                rows={3}
+              />
+              <div className="flex items-center justify-between gap-3">
+                <p
+                  className={cn(
+                    "text-xs font-medium",
+                    noteStatus === "saved"
+                      ? "text-emerald-600"
+                      : noteStatus === "saving" || hasNoteChanges
+                        ? "text-neutral-500"
+                        : "text-transparent"
+                  )}
+                >
+                  {noteStatusText || " "}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleSaveNote}
+                  disabled={!canSaveNote}
+                  className={cn(
+                    "rounded-lg px-3 py-1.5 text-sm font-semibold transition",
+                    canSaveNote
+                      ? "bg-coffee-primary text-white hover:brightness-95"
+                      : "cursor-not-allowed bg-neutral-200 text-neutral-500"
+                  )}
+                >
+                  Kaydet
+                </button>
+              </div>
+            </div>
           </SectionBlock>
 
           <SectionBlock title="İşlem Geçmişi">
@@ -113,6 +585,68 @@ export function PatternDetailPanel({ pattern, onSelectDigital, onSelectFinal }: 
           </SectionBlock>
         </div>
       </Accordion>
+
+      {showMetersModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-neutral-900">Metreleri Düzenle</h2>
+                <p className="text-sm text-neutral-500">Alanlar 0 veya daha büyük olmalı.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMetersModal(false)}
+                className="rounded-lg px-2 py-1 text-sm text-neutral-500 hover:bg-neutral-100"
+              >
+                Kapat
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <MeterField
+                label="Üretim"
+                value={metersDraft.totalProducedMeters}
+                onChange={(value) => setMetersDraft((prev) => ({ ...prev, totalProducedMeters: value }))}
+              />
+              <MeterField
+                label="Stok"
+                value={metersDraft.stockMeters}
+                onChange={(value) => setMetersDraft((prev) => ({ ...prev, stockMeters: value }))}
+              />
+              <MeterField
+                label="Boyahane"
+                value={metersDraft.inDyehouseMeters}
+                onChange={(value) => setMetersDraft((prev) => ({ ...prev, inDyehouseMeters: value }))}
+              />
+              <MeterField
+                label="Hatalı"
+                value={metersDraft.defectMeters}
+                onChange={(value) => setMetersDraft((prev) => ({ ...prev, defectMeters: value }))}
+              />
+            </div>
+
+            {metersError && <p className="mt-3 text-sm text-red-600">{metersError}</p>}
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowMetersModal(false)}
+                className="rounded-lg px-3 py-2 text-sm text-neutral-600 hover:bg-neutral-100"
+              >
+                İptal
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveMeters}
+                className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white hover:bg-coffee-primary/90"
+              >
+                Kaydet
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -168,6 +702,28 @@ function StatCard({ icon, label, value }: StatCardProps) {
         <div className="text-base font-semibold text-neutral-900">{value}</div>
       </div>
     </div>
+  );
+}
+
+type MeterFieldProps = {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+};
+
+function MeterField({ label, value, onChange }: MeterFieldProps) {
+  return (
+    <label className="space-y-1 text-sm text-neutral-700">
+      <span>{label}</span>
+      <input
+        type="number"
+        min="0"
+        step="0.01"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+      />
+    </label>
   );
 }
 

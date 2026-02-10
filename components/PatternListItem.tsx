@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { AlertTriangle, Image as ImageIcon, Package, Palette } from "lucide-react";
 import { cn } from "@/lib/cn";
-import type { Pattern } from "@/mock/patterns";
+import type { Pattern } from "@/lib/domain/pattern";
 
 type PatternListItemProps = {
   pattern: Pattern;
@@ -11,10 +11,15 @@ type PatternListItemProps = {
   onSelect?: (id: string) => void;
 };
 
-const stageLabel: Record<string, string> = {
+const stageLabel: Record<Pattern["currentStage"], string> = {
   DEPO: "Depo",
   BOYAHANE: "Boyahane",
   DOKUMA: "Dokuma",
+};
+
+const fmt = (n: number | null | undefined) => {
+  const safe = Number(n);
+  return Number.isFinite(safe) ? safe.toLocaleString("tr-TR") : "0";
 };
 
 export function PatternListItem({ pattern, selected, onSelect }: PatternListItemProps) {
@@ -50,19 +55,35 @@ export function PatternListItem({ pattern, selected, onSelect }: PatternListItem
         )}
       </div>
 
-      <div className="flex-1 min-w-0 space-y-1">
+      <div className="min-w-0 flex-1 space-y-1">
         <div className="flex items-start justify-between gap-2">
           <div className="truncate text-sm font-semibold text-neutral-900">
-            {pattern.fabricCode} · {pattern.fabricName}
+            {pattern.fabricCode} - {pattern.fabricName}
           </div>
+
           <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-semibold text-neutral-700">
             {stageLabel[pattern.currentStage] ?? pattern.currentStage}
           </span>
         </div>
+
+        <div className="truncate text-[11px] font-semibold text-neutral-600">
+          {pattern.weaveType} | Cozgu: {pattern.warpCount} | Atki: {pattern.weftCount} | Tel:{" "}
+          {pattern.totalEnds}
+        </div>
+
         <div className="mt-1 flex flex-wrap gap-2 text-[11px] font-semibold">
-          <Badge icon={<Package className="h-3.5 w-3.5" />} label="Stok" value={`${pattern.stockMeters} m`} />
-          <Badge icon={<AlertTriangle className="h-3.5 w-3.5" />} label="Hatalı" value={`${pattern.defectMeters} m`} />
-          <Badge icon={<Palette className="h-3.5 w-3.5" />} label="Boyahane" value={`${pattern.inDyehouseMeters} m`} />
+          <Badge icon={<Package className="h-3.5 w-3.5" />} label="Stok" value={`${fmt(pattern.stockMeters)} m`} />
+          <Badge
+            icon={<AlertTriangle className="h-3.5 w-3.5" />}
+            label="Hatali"
+            value={`${fmt(pattern.defectMeters)} m`}
+          />
+          <Badge
+            icon={<Palette className="h-3.5 w-3.5" />}
+            label="Boyahane"
+            value={`${fmt(pattern.inDyehouseMeters)} m`}
+          />
+          <Badge icon={<Package className="h-3.5 w-3.5" />} label="Uretim" value={`${fmt(pattern.totalProducedMeters)} m`} />
         </div>
       </div>
     </button>
