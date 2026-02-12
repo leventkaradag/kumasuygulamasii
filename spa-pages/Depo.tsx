@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { Plus, Search } from "lucide-react";
 import Layout from "@/components/Layout";
 import { cn } from "@/lib/cn";
@@ -19,6 +19,19 @@ type ColorSummary = {
   availableMeters: number;
   availableRolls: number;
 };
+type RollGroup = {
+  key: string;
+  colorName: string;
+  meters: number;
+  rolls: FabricRoll[];
+  inStockRolls: FabricRoll[];
+  reservedRolls: FabricRoll[];
+  shippedRolls: FabricRoll[];
+  availableCount: number;
+  totalCount: number;
+  totalMeters: number;
+  availableMeters: number;
+};
 
 const statusLabel: Record<FabricRollStatus, string> = {
   IN_STOCK: "Stokta",
@@ -34,6 +47,13 @@ const statusClass: Record<FabricRollStatus, string> = {
   SHIPPED: "border-sky-500/30 bg-sky-50 text-sky-700",
   RETURNED: "border-violet-500/30 bg-violet-50 text-violet-700",
   SCRAP: "border-rose-500/30 bg-rose-50 text-rose-700",
+};
+const statusSortPriority: Record<FabricRollStatus, number> = {
+  IN_STOCK: 0,
+  RESERVED: 1,
+  RETURNED: 2,
+  SCRAP: 3,
+  SHIPPED: 4,
 };
 
 const todayInput = () => new Date().toISOString().slice(0, 10);
@@ -143,15 +163,13 @@ export default function DepoPage() {
   const [addNote, setAddNote] = useState("");
   const [addError, setAddError] = useState("");
 
-  const [reserveRollId, setReserveRollId] = useState<string | null>(null);
-  const [reserveFor, setReserveFor] = useState("");
-  const [reserveDate, setReserveDate] = useState(todayInput());
-  const [reserveError, setReserveError] = useState("");
-
-  const [shipRollId, setShipRollId] = useState<string | null>(null);
-  const [shipCounterparty, setShipCounterparty] = useState("");
-  const [shipDate, setShipDate] = useState(todayInput());
-  const [shipError, setShipError] = useState("");
+  const [selectedCountByGroup, setSelectedCountByGroup] = useState<Record<string, number>>({});
+  const [shipGroupKey, setShipGroupKey] = useState<string | null>(null);
+  const [groupShipCounterparty, setGroupShipCounterparty] = useState("");
+  const [groupShipDate, setGroupShipDate] = useState(todayInput());
+  const [groupShipError, setGroupShipError] = useState("");
+  const [groupShipWarning, setGroupShipWarning] = useState("");
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
 
   const refreshData = (preferredPatternId?: string | null) => {
     const nextPatterns = sortPatterns(patternsLocalRepo.list().filter(isPatternVisible));
@@ -211,14 +229,129 @@ export default function DepoPage() {
 
   const visibleRolls = useMemo(() => {
     const normalized = rollSearch.trim().toLocaleLowerCase("tr-TR");
-    return selectedPatternRolls.filter((roll) => {
-      if (rollStatus && roll.status !== rollStatus) return false;
-      if (!normalized) return true;
-      const no = (roll.rollNo ?? "").toLocaleLowerCase("tr-TR");
-      const color = selectedPattern ? rollColor(roll, selectedPattern).toLocaleLowerCase("tr-TR") : "";
-      return no.includes(normalized) || color.includes(normalized);
-    });
+    return selectedPatternRolls
+      .filter((roll) => {
+        if (rollStatus && roll.status !== rollStatus) return false;
+        if (!normalized) return true;
+        const no = (roll.rollNo ?? "").toLocaleLowerCase("tr-TR");
+        const color = selectedPattern ? rollColor(roll, selectedPattern).toLocaleLowerCase("tr-TR") : "";
+        return no.includes(normalized) || color.includes(normalized);
+      })
+      .sort((a, b) => {
+        const byStatus = statusSortPriority[a.status] - statusSortPriority[b.status];
+        if (byStatus !== 0) return byStatus;
+        return toTimestamp(b.inAt) - toTimestamp(a.inAt);
+      });
   }, [selectedPatternRolls, selectedPattern, rollSearch, rollStatus]);
+  const groupedRolls = useMemo(() => {
+    if (!selectedPattern) return [];
+
+    const groups = new Map<string, RollGroup>();
+
+    visibleRolls.forEach((roll) => {
+      const colorName = rollColor(roll, selectedPattern);
+      const colorKey = roll.variantId
+        ? roll.variantId
+        : (roll.colorName ?? colorName).trim().toLocaleLowerCase("tr-TR");
+      const normalizedColorKey = colorKey || "renk-yok";
+      const key = `${normalizedColorKey}__${roll.meters}`;
+
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          colorName,
+          meters: roll.meters,
+          rolls: [],
+          inStockRolls: [],
+          reservedRolls: [],
+          shippedRolls: [],
+          availableCount: 0,
+          totalCount: 0,
+          totalMeters: 0,
+          availableMeters: 0,
+        });
+      }
+
+      groups.get(key)!.rolls.push(roll);
+    });
+
+    return Array.from(groups.values())
+      .map((group) => {
+        const inStockRolls = group.rolls
+          .filter((roll) => roll.status === "IN_STOCK")
+          .sort((a, b) => toTimestamp(a.inAt) - toTimestamp(b.inAt));
+        const reservedRolls = group.rolls.filter((roll) => roll.status === "RESERVED");
+        const shippedRolls = group.rolls.filter((roll) => roll.status === "SHIPPED");
+        const totalCount = group.rolls.length;
+        const availableCount = inStockRolls.length;
+        return {
+          ...group,
+          inStockRolls,
+          reservedRolls,
+          shippedRolls,
+          totalCount,
+          availableCount,
+          totalMeters: totalCount * group.meters,
+          availableMeters: availableCount * group.meters,
+        };
+      })
+      .sort((a, b) => {
+        const byColor = a.colorName.localeCompare(b.colorName, "tr-TR");
+        if (byColor !== 0) return byColor;
+        return a.meters - b.meters;
+      });
+  }, [visibleRolls, selectedPattern]);
+  const selectedCount = useMemo(
+    () => Object.values(selectedCountByGroup).reduce((total, value) => total + (value > 0 ? value : 0), 0),
+    [selectedCountByGroup]
+  );
+  const selectedMeters = useMemo(
+    () =>
+      groupedRolls.reduce((total, group) => {
+        const selectedForGroup = selectedCountByGroup[group.key] ?? 0;
+        return total + selectedForGroup * group.meters;
+      }, 0),
+    [groupedRolls, selectedCountByGroup]
+  );
+  const shipTargetGroup = useMemo(
+    () => groupedRolls.find((group) => group.key === shipGroupKey) ?? null,
+    [groupedRolls, shipGroupKey]
+  );
+
+  useEffect(() => {
+    setSelectedCountByGroup((current) => {
+      const next: Record<string, number> = {};
+      groupedRolls.forEach((group) => {
+        const currentValue = current[group.key] ?? 0;
+        const clamped = Math.max(0, Math.min(group.availableCount, currentValue));
+        if (clamped > 0) {
+          next[group.key] = clamped;
+        }
+      });
+      const sameLength = Object.keys(next).length === Object.keys(current).length;
+      const isSame =
+        sameLength &&
+        Object.entries(next).every(([key, value]) => (current[key] ?? 0) === value);
+      return isSame ? current : next;
+    });
+  }, [groupedRolls]);
+
+  useEffect(() => {
+    const groupKeys = new Set(groupedRolls.map((group) => group.key));
+    setExpandedGroups((current) => {
+      if (current.size === 0) return current;
+      let changed = false;
+      const next = new Set<string>();
+      current.forEach((key) => {
+        if (groupKeys.has(key)) {
+          next.add(key);
+          return;
+        }
+        changed = true;
+      });
+      return changed ? next : current;
+    });
+  }, [groupedRolls]);
 
   const colorSummary = useMemo(() => (selectedPattern ? buildColorSummary(selectedPatternRolls, selectedPattern) : []), [selectedPatternRolls, selectedPattern]);
 
@@ -263,31 +396,87 @@ export default function DepoPage() {
     }
   };
 
-  const handleReserve = () => {
-    if (!reserveRollId) return;
-    try {
-      const dateISO = toIsoDate(reserveDate, "Tarih");
-      const updated = depoLocalRepo.reserveRoll(reserveRollId, reserveFor, dateISO);
-      if (!updated) throw new Error("Bu top sadece stokta iken rezerve edilebilir.");
-      setReserveRollId(null);
-      setReserveError("");
-      refreshData(updated.patternId);
-    } catch (error) {
-      setReserveError(error instanceof Error ? error.message : "Rezerve islemi basarisiz");
-    }
+  const setGroupSelectionCount = (groupKey: string, nextValue: number, maxCount: number) => {
+    const clamped = Math.max(0, Math.min(maxCount, nextValue));
+    setSelectedCountByGroup((current) => {
+      if (clamped <= 0) {
+        if (current[groupKey] === undefined) return current;
+        const next = { ...current };
+        delete next[groupKey];
+        return next;
+      }
+      if (current[groupKey] === clamped) return current;
+      return { ...current, [groupKey]: clamped };
+    });
   };
 
-  const handleShip = () => {
-    if (!shipRollId) return;
+  const toggleGroupDetail = (groupKey: string) => {
+    setExpandedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+      }
+      return next;
+    });
+  };
+
+  const openGroupShipModal = (groupKey: string) => {
+    const selectedForGroup = selectedCountByGroup[groupKey] ?? 0;
+    if (selectedForGroup <= 0) return;
+    setShipGroupKey(groupKey);
+    setGroupShipCounterparty("");
+    setGroupShipDate(todayInput());
+    setGroupShipError("");
+  };
+
+  const handleGroupShip = () => {
+    if (!shipTargetGroup) {
+      setGroupShipError("Sevk grubu bulunamadi.");
+      return;
+    }
+
+    const targetCount = selectedCountByGroup[shipTargetGroup.key] ?? 0;
+    if (targetCount <= 0) {
+      setGroupShipError("Sevk edilecek top adedini secin.");
+      return;
+    }
+
     try {
-      const dateISO = toIsoDate(shipDate, "Tarih");
-      const updated = depoLocalRepo.shipRoll(shipRollId, shipCounterparty, dateISO);
-      if (!updated) throw new Error("Bu top stokta veya rezerve olmali.");
-      setShipRollId(null);
-      setShipError("");
-      refreshData(updated.patternId);
+      const counterparty = groupShipCounterparty.trim();
+      if (!counterparty) {
+        throw new Error("Musteri / karsi taraf zorunlu.");
+      }
+      const dateISO = toIsoDate(groupShipDate, "Tarih");
+      const targetRolls = shipTargetGroup.inStockRolls.slice(0, targetCount);
+      const failedIds: string[] = [];
+
+      targetRolls.forEach((roll) => {
+        const updated = depoLocalRepo.shipRoll(roll.id, counterparty, dateISO);
+        if (!updated) {
+          failedIds.push(roll.id);
+        }
+      });
+
+      setShipGroupKey(null);
+      setGroupShipError("");
+      setSelectedCountByGroup((current) => {
+        if (current[shipTargetGroup.key] === undefined) return current;
+        const next = { ...current };
+        delete next[shipTargetGroup.key];
+        return next;
+      });
+
+      if (failedIds.length > 0) {
+        setGroupShipWarning(`${failedIds.length} top sevk edilemedi.`);
+      } else {
+        setGroupShipWarning("");
+      }
+
+      refreshData(selectedPattern?.id ?? null);
     } catch (error) {
-      setShipError(error instanceof Error ? error.message : "Sevk islemi basarisiz");
+      setGroupShipError(error instanceof Error ? error.message : "Toplu sevk islemi basarisiz");
     }
   };
 
@@ -368,37 +557,90 @@ export default function DepoPage() {
                       <select value={rollStatus} onChange={(e) => setRollStatus(e.target.value as FabricRollStatus | "")} className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"><option value="">Tum Durumlar</option><option value="IN_STOCK">Stokta</option><option value="RESERVED">Rezerve</option><option value="SHIPPED">Sevk</option><option value="RETURNED">Iade</option><option value="SCRAP">Hurda</option></select>
                     </div>
                   </div>
+                  {selectedCount > 0 ? (
+                    <div className="mt-3 rounded-lg border border-sky-500/30 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-800">
+                      Secili: {selectedCount} top / {fmt(selectedMeters)} m
+                    </div>
+                  ) : null}
+                  {groupShipWarning ? <p className="mt-2 text-xs font-medium text-rose-700">{groupShipWarning}</p> : null}
                   <div className="mt-3 overflow-auto rounded-lg border border-black/10">
                     <table className="w-full text-left text-sm">
-                      <thead className="bg-neutral-50 text-neutral-600"><tr><th className="px-3 py-2 font-semibold">Roll No</th><th className="px-3 py-2 font-semibold">Renk</th><th className="px-3 py-2 font-semibold">Metre</th><th className="px-3 py-2 font-semibold">Durum</th><th className="px-3 py-2 font-semibold">Giris</th><th className="px-3 py-2 font-semibold">Rezerve / Kime</th><th className="px-3 py-2 font-semibold">Islem</th></tr></thead>
+                      <thead className="bg-neutral-50 text-neutral-600"><tr><th className="px-3 py-2 font-semibold">Renk</th><th className="px-3 py-2 font-semibold">Metre</th><th className="px-3 py-2 font-semibold">Toplam Top</th><th className="px-3 py-2 font-semibold">Kullanilabilir Top</th><th className="px-3 py-2 font-semibold">Secilecek</th><th className="px-3 py-2 font-semibold">Islem</th></tr></thead>
                       <tbody className="text-neutral-800">
-                        {visibleRolls.map((roll) => {
-                          const partyLabel =
-                            roll.status === "RESERVED"
-                              ? (roll.reservedFor ?? "-")
-                              : roll.status === "SHIPPED"
-                                ? (roll.counterparty ?? "-")
-                                : "-";
+                        {groupedRolls.map((group) => {
+                          const selectedForGroup = selectedCountByGroup[group.key] ?? 0;
                           return (
-                            <tr key={roll.id} className="border-t border-black/5">
-                              <td className="px-3 py-2">{roll.rollNo ?? "-"}</td>
-                              <td className="px-3 py-2">{rollColor(roll, selectedPattern)}</td>
-                              <td className="px-3 py-2 font-medium">{fmt(roll.meters)} m</td>
-                              <td className="px-3 py-2"><span className={cn("inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold", statusClass[roll.status])}>{statusLabel[roll.status]}</span></td>
-                              <td className="px-3 py-2">{new Date(roll.inAt).toLocaleDateString("tr-TR")}</td>
-                              <td className="px-3 py-2">{partyLabel}</td>
-                              <td className="px-3 py-2">
-                                <div className="flex flex-wrap gap-2">
-                                  {roll.status === "IN_STOCK" ? <button type="button" onClick={() => { setReserveRollId(roll.id); setReserveFor(""); setReserveDate(todayInput()); setReserveError(""); }} className="rounded-lg border border-amber-500/40 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-100">Rezerve Et</button> : null}
-                                  {roll.status === "RESERVED" ? <button type="button" onClick={() => { const updated = depoLocalRepo.unreserveRoll(roll.id); if (updated) refreshData(updated.patternId); }} className="rounded-lg border border-violet-500/40 bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 transition hover:bg-violet-100">Rezerveyi Kaldir</button> : null}
-                                  {roll.status === "IN_STOCK" || roll.status === "RESERVED" ? <button type="button" onClick={() => { setShipRollId(roll.id); setShipCounterparty(""); setShipDate(todayInput()); setShipError(""); }} className="rounded-lg border border-sky-500/40 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100">Sevk Et</button> : null}
-                                  {roll.status === "SHIPPED" ? <button type="button" onClick={() => { const accepted = window.confirm("Bu top iade olarak isaretlenecek. Devam?"); if (!accepted) return; const updated = depoLocalRepo.returnRoll(roll.id, new Date().toISOString()); if (updated) refreshData(updated.patternId); }} className="rounded-lg border border-violet-500/40 bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 transition hover:bg-violet-100">Iade</button> : null}
-                                </div>
-                              </td>
-                            </tr>
+                            <Fragment key={group.key}>
+                              <tr className="border-t border-black/5">
+                                <td className="px-3 py-2 font-medium">{group.colorName}</td>
+                                <td className="px-3 py-2">{fmt(group.meters)} m</td>
+                                <td className="px-3 py-2">{group.totalCount} top ({fmt(group.totalMeters)} m)</td>
+                                <td className="px-3 py-2">{group.availableCount} top ({fmt(group.availableMeters)} m)</td>
+                                <td className="px-3 py-2">
+                                  <div className="inline-flex items-center gap-2 rounded-lg border border-black/10 px-2 py-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => setGroupSelectionCount(group.key, selectedForGroup - 1, group.availableCount)}
+                                      disabled={selectedForGroup <= 0}
+                                      className="h-6 w-6 rounded border border-black/10 text-sm font-semibold text-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      -
+                                    </button>
+                                    <span className="min-w-8 text-center text-sm font-semibold text-neutral-800">{selectedForGroup}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => setGroupSelectionCount(group.key, selectedForGroup + 1, group.availableCount)}
+                                      disabled={selectedForGroup >= group.availableCount}
+                                      className="h-6 w-6 rounded border border-black/10 text-sm font-semibold text-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2">
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => openGroupShipModal(group.key)}
+                                      disabled={selectedForGroup <= 0}
+                                      className="rounded-lg border border-sky-500/40 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      Sevk Et
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleGroupDetail(group.key)}
+                                      className="text-xs font-semibold text-neutral-600 underline-offset-2 hover:underline"
+                                    >
+                                      {expandedGroups.has(group.key) ? "Detayi Gizle" : "Detay"}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                              {expandedGroups.has(group.key) ? (
+                                <tr className="border-t border-black/5 bg-neutral-50/70">
+                                  <td colSpan={6} className="px-3 py-2">
+                                    <div className="flex flex-wrap gap-2">
+                                      {group.rolls.map((roll) => (
+                                        <span key={roll.id} className="inline-flex items-center gap-1 rounded-full border border-black/10 bg-white px-2 py-0.5 text-xs text-neutral-700">
+                                          <span>{roll.rollNo ?? roll.id.slice(0, 8)}</span>
+                                          <span className={cn("inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-semibold", statusClass[roll.status])}>
+                                            {statusLabel[roll.status]}
+                                          </span>
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </td>
+                                </tr>
+                              ) : null}
+                            </Fragment>
                           );
                         })}
-                        {visibleRolls.length === 0 ? <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-neutral-500">Filtreye uygun top kaydi yok.</td></tr> : null}
+                        {groupedRolls.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="px-3 py-8 text-center text-sm text-neutral-500">Filtreye uygun grup kaydi yok.</td>
+                          </tr>
+                        ) : null}
                       </tbody>
                     </table>
                   </div>
@@ -408,7 +650,6 @@ export default function DepoPage() {
           </section>
         </div>
       </div>
-
       {addOpen && selectedPattern ? (
         <Modal title="Top Girisi" onClose={() => setAddOpen(false)}>
           <p className="text-sm text-neutral-600">{selectedPattern.fabricCode} - {selectedPattern.fabricName}</p>
@@ -430,30 +671,22 @@ export default function DepoPage() {
         </Modal>
       ) : null}
 
-      {reserveRollId ? (
-        <Modal title="Rezerve Et" onClose={() => setReserveRollId(null)}>
+      {shipGroupKey && shipTargetGroup ? (
+        <Modal title="Toplu Sevk Et" onClose={() => { setShipGroupKey(null); setGroupShipError(""); }}>
           <div className="space-y-3">
-            <input type="text" value={reserveFor} onChange={(e) => setReserveFor(e.target.value)} placeholder="Rezerve kime" className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
-            <input type="date" value={reserveDate} onChange={(e) => setReserveDate(e.target.value)} className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
+            <p className="text-sm text-neutral-600">
+              {shipTargetGroup.colorName} / {fmt(shipTargetGroup.meters)} m
+            </p>
+            <p className="text-sm text-neutral-600">
+              Sevk adedi: {selectedCountByGroup[shipTargetGroup.key] ?? 0} top
+            </p>
+            <input type="text" value={groupShipCounterparty} onChange={(e) => setGroupShipCounterparty(e.target.value)} placeholder="Musteri / karsi taraf" className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
+            <input type="date" value={groupShipDate} onChange={(e) => setGroupShipDate(e.target.value)} className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
           </div>
-          {reserveError ? <p className="mt-3 text-sm text-rose-600">{reserveError}</p> : null}
+          {groupShipError ? <p className="mt-3 text-sm text-rose-600">{groupShipError}</p> : null}
           <div className="mt-4 flex justify-end gap-2">
-            <button type="button" onClick={() => setReserveRollId(null)} className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100">Vazgec</button>
-            <button type="button" onClick={handleReserve} className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Kaydet</button>
-          </div>
-        </Modal>
-      ) : null}
-
-      {shipRollId ? (
-        <Modal title="Sevk Et" onClose={() => setShipRollId(null)}>
-          <div className="space-y-3">
-            <input type="text" value={shipCounterparty} onChange={(e) => setShipCounterparty(e.target.value)} placeholder="Musteri / karsi taraf" className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
-            <input type="date" value={shipDate} onChange={(e) => setShipDate(e.target.value)} className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
-          </div>
-          {shipError ? <p className="mt-3 text-sm text-rose-600">{shipError}</p> : null}
-          <div className="mt-4 flex justify-end gap-2">
-            <button type="button" onClick={() => setShipRollId(null)} className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100">Vazgec</button>
-            <button type="button" onClick={handleShip} className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Kaydet</button>
+            <button type="button" onClick={() => { setShipGroupKey(null); setGroupShipError(""); }} className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100">Vazgec</button>
+            <button type="button" onClick={handleGroupShip} className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Kaydet</button>
           </div>
         </Modal>
       ) : null}
