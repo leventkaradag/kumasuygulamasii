@@ -6,6 +6,12 @@ export type Variant = {
   colorCode?: string;
   name?: string;
   active?: boolean;
+  stockMeters?: number;
+  stockRollCount?: number;
+  reservedMeters?: number;
+  reservedRollCount?: number;
+  reservedFor?: string;
+  lastStockInAt?: string;
 };
 
 export type Pattern = {

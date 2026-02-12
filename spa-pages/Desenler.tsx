@@ -27,14 +27,11 @@ const sortPatternsByStage = (items: Pattern[]) =>
 
 const seedPatterns = sortPatternsByStage(patternsRepo.list());
 
-type PatternTab = "ALL" | Stage | "ARCHIVE";
+type PatternTab = "ACTIVE" | "ARCHIVE";
 
 const patternTabs: { label: string; value: PatternTab }[] = [
-  { label: "Hepsi", value: "ALL" },
-  { label: "Dokuma", value: "DOKUMA" },
-  { label: "Boyahane", value: "BOYAHANE" },
-  { label: "Depo", value: "DEPO" },
-  { label: "Arşivdekiler", value: "ARCHIVE" },
+  { label: "Aktif", value: "ACTIVE" },
+  { label: "Arşiv", value: "ARCHIVE" },
 ];
 
 type PatternFilters = {
@@ -57,6 +54,7 @@ type PatternFilterMeta = Pattern &
     createdAt: string;
     gramaj: number | string;
     eni: number | string;
+    __deleted?: boolean;
   }>;
 
 const normalizeQuery = (query: string) => query.trim().toLocaleLowerCase("tr-TR");
@@ -90,7 +88,7 @@ const atEndOfDay = (date: Date) => {
 
 const getFilteredPatterns = (
   items: Pattern[],
-  tab: PatternTab,
+  showArchived: boolean,
   query: string,
   filters: PatternFilters
 ) => {
@@ -104,10 +102,10 @@ const getFilteredPatterns = (
 
   return items.filter((pattern) => {
     const meta = pattern as PatternFilterMeta;
-    const matchesTab =
-      tab === "ARCHIVE"
-        ? pattern.archived === true
-        : pattern.archived !== true && (tab === "ALL" || pattern.currentStage === tab);
+    const isDeleted = meta.__deleted === true;
+    const matchesTab = showArchived
+      ? pattern.archived === true && !isDeleted
+      : pattern.archived !== true && !isDeleted;
 
     if (!matchesTab) return false;
 
@@ -186,25 +184,26 @@ const emptyPatternForCreate: Pattern = {
 export default function DesenlerPage() {
   const [patterns, setPatterns] = useState<Pattern[]>(seedPatterns);
   const [search, setSearch] = useState("");
-  const [activeTab, setActiveTab] = useState<PatternTab>("ALL");
+  const [activeTab, setActiveTab] = useState<PatternTab>("ACTIVE");
   const [filters, setFilters] = useState<PatternFilters>({});
   const [isFilterOpen, setIsFilterOpen] = useState(false);
-  const [selectedId, setSelectedId] = useState<string>(seedPatterns[0]?.id ?? "");
+  const [selectedId, setSelectedId] = useState<string | null>(seedPatterns[0]?.id ?? null);
   const [showPatternModal, setShowPatternModal] = useState(false);
   const [patternModalMode, setPatternModalMode] = useState<"add" | "edit">("edit");
+  const showArchived = activeTab === "ARCHIVE";
 
   useEffect(() => {
     setPatterns(sortPatternsByStage(patternsLocalRepo.list()));
   }, []);
 
   const filteredPatterns = useMemo(
-    () => getFilteredPatterns(patterns, activeTab, search, filters),
-    [patterns, activeTab, search, filters]
+    () => getFilteredPatterns(patterns, showArchived, search, filters),
+    [patterns, showArchived, search, filters]
   );
 
   useEffect(() => {
     if (selectedId && filteredPatterns.some((pattern) => pattern.id === selectedId)) return;
-    setSelectedId(filteredPatterns[0]?.id ?? "");
+    setSelectedId(filteredPatterns[0]?.id ?? null);
   }, [filteredPatterns, selectedId]);
 
   useEffect(() => {
@@ -225,21 +224,21 @@ export default function DesenlerPage() {
   const selectedPattern = filteredPatterns.find((pattern) => pattern.id === selectedId) ?? null;
   const modalPattern = patternModalMode === "add" ? emptyPatternForCreate : selectedPattern;
 
-  const refreshPatterns = (preferredId?: string) => {
+  const refreshPatterns = (preferredId?: string, forceResetSelection = false) => {
     const refreshed = sortPatternsByStage(patternsLocalRepo.list());
     setPatterns(refreshed);
 
-    const refreshedFiltered = getFilteredPatterns(refreshed, activeTab, search, filters);
+    const refreshedFiltered = getFilteredPatterns(refreshed, showArchived, search, filters);
     if (preferredId && refreshedFiltered.some((pattern) => pattern.id === preferredId)) {
       setSelectedId(preferredId);
       return;
     }
 
-    if (selectedId && refreshedFiltered.some((pattern) => pattern.id === selectedId)) {
+    if (!forceResetSelection && selectedId && refreshedFiltered.some((pattern) => pattern.id === selectedId)) {
       return;
     }
 
-    setSelectedId(refreshedFiltered[0]?.id ?? "");
+    setSelectedId(refreshedFiltered[0]?.id ?? null);
   };
 
   const handlePatternSave = (savedPattern: Pattern) => {
@@ -247,8 +246,14 @@ export default function DesenlerPage() {
   };
 
   const handlePatternUpdated = (updatedPattern?: Pattern) => {
+    if (!updatedPattern) {
+      setSelectedId(null);
+      refreshPatterns(undefined, true);
+      return;
+    }
+
     const preferredId =
-      updatedPattern && getFilteredPatterns([updatedPattern], activeTab, search, filters).length > 0
+      updatedPattern && getFilteredPatterns([updatedPattern], showArchived, search, filters).length > 0
         ? updatedPattern.id
         : undefined;
     refreshPatterns(preferredId);
@@ -301,10 +306,9 @@ export default function DesenlerPage() {
                 />
               </label>
             </div>
-            <div className="flex flex-wrap gap-2" role="tablist" aria-label="Desen sekmeleri">
+            <div className="flex flex-wrap gap-2" role="tablist" aria-label="Liste sekmeleri">
               {patternTabs.map(({ label, value }) => {
                 const active = activeTab === value;
-                const archiveTab = value === "ARCHIVE";
 
                 return (
                   <button
@@ -316,7 +320,7 @@ export default function DesenlerPage() {
                     className={cn(
                       "rounded-lg border px-3 py-1.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coffee-primary/60",
                       active
-                        ? archiveTab
+                        ? value === "ARCHIVE"
                           ? "border-emerald-500/50 bg-emerald-50 text-emerald-700"
                           : "border-coffee-primary bg-coffee-primary/10 text-coffee-primary"
                         : "border-black/10 bg-white text-neutral-700 hover:border-coffee-primary/40 hover:bg-white"
@@ -368,7 +372,7 @@ export default function DesenlerPage() {
                   key={pattern.id}
                   pattern={pattern}
                   selected={pattern.id === selectedId}
-                  onSelect={setSelectedId}
+                  onSelect={(id) => setSelectedId(id)}
                 />
               ))}
               {filteredPatterns.length === 0 && (
@@ -383,7 +387,7 @@ export default function DesenlerPage() {
             <PatternDetailPanel
               pattern={selectedPattern}
               onPatternUpdated={handlePatternUpdated}
-              showArchived={activeTab === "ARCHIVE"}
+              showArchived={showArchived}
             />
           </div>
           </div>

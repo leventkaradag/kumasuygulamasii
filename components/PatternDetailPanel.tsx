@@ -474,6 +474,12 @@ export function PatternDetailPanel({
       colorCode: variant.colorCode,
       name: variant.colorName,
       active: variant.active,
+      stockMeters: variant.stockMeters,
+      stockRollCount: variant.stockRollCount,
+      reservedMeters: variant.reservedMeters,
+      reservedRollCount: variant.reservedRollCount,
+      reservedFor: variant.reservedFor,
+      lastStockInAt: variant.lastStockInAt,
     }));
 
     const updated = patternsLocalRepo.update(pattern.id, { variants: normalizedNext });
@@ -668,8 +674,8 @@ export function PatternDetailPanel({
     }
 
     setArchiveStatus("saving");
-    patternsLocalRepo.deletePattern(pattern.id);
-    onPatternUpdated?.();
+    patternsLocalRepo.deletePatternHard(pattern.id);
+    onPatternUpdated?.(undefined);
     setArchiveStatus("saved");
 
     resetArchiveStatusTimerRef.current = setTimeout(() => {
@@ -678,7 +684,7 @@ export function PatternDetailPanel({
     }, 1200);
   };
 
-  const showArchivedActions = showArchived && pattern.archived === true;
+  const showArchivedActions = showArchived;
 
   return (
     <div className="space-y-4 rounded-2xl border border-black/5 bg-white/80 p-6 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
@@ -755,25 +761,28 @@ export function PatternDetailPanel({
               <button
                 type="button"
                 onClick={handleRestorePattern}
-                className="rounded-lg border border-emerald-500/50 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                disabled={archiveStatus === "saving"}
+                className="rounded-lg border border-emerald-500/50 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50"
               >
-                Geri Getir
+                Geri Al
               </button>
               <button
                 type="button"
                 onClick={handleDeletePattern}
-                className="rounded-lg border border-red-500/40 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-700 transition hover:bg-red-100"
+                disabled={archiveStatus === "saving"}
+                className="rounded-lg border border-red-500/40 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:opacity-50"
               >
-                Sil
+                Kalıcı Sil
               </button>
             </>
           ) : (
             <button
               type="button"
               onClick={handleArchive}
-              className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm font-semibold text-neutral-700 transition hover:border-coffee-primary/40"
+              disabled={archiveStatus === "saving"}
+              className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm font-semibold text-neutral-700 transition hover:border-coffee-primary/40 disabled:opacity-50"
             >
-              Kaldır
+              Sil
             </button>
           )}
         </div>

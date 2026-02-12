@@ -342,7 +342,7 @@ export const createPatternsLocalRepo = (baseProvider: {
       return nextPattern;
     },
 
-    deletePattern(id: string): boolean {
+    deletePatternHard(id: string): boolean {
       const overrides = readOverrides();
       const current = this.list().find((pattern) => pattern.id === id);
       const currentFabricCode = current?.fabricCode;
@@ -364,6 +364,10 @@ export const createPatternsLocalRepo = (baseProvider: {
 
       writeOverrides(overrides);
       return true;
+    },
+
+    deletePattern(id: string): boolean {
+      return this.deletePatternHard(id);
     },
 
     remove(id: string): boolean {
