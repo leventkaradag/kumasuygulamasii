@@ -10,6 +10,7 @@ const links = [
   { href: "/dokuma", label: "Dokuma" },
   { href: "/boyahane", label: "Boyahane" },
   { href: "/depo", label: "Depo" },
+  { href: "/sevk-rezerv", label: "Sevk/Rezerv Belgeleri" },
   { href: "/raporlar", label: "Raporlar" },
   { href: "/ayarlar", label: "Ayarlar" },
 ];

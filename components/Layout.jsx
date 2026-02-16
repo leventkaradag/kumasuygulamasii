@@ -11,6 +11,7 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/desenler", label: "Desenler" },
   { href: "/depo", label: "Depo" },
+  { href: "/sevk-rezerv", label: "Sevk/Rezerv Belgeleri" },
   { href: "/raporlar", label: "Raporlar" },
 ];
 
@@ -18,11 +19,9 @@ export default function Layout({ title, children }) {
   const router = useRouter();
   const pathname = usePathname();
   const rootRef = useRef(null);
-  const [user, setUser] = useState(null);
-
-  useEffect(() => {
-    setUser(getUser());
-  }, []);
+  const [user, setUser] = useState(() =>
+    typeof window !== "undefined" ? getUser() : null
+  );
 
   useEffect(() => {
     const ctx = gsap.context(() => {

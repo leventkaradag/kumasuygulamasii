@@ -3,6 +3,7 @@ export type FabricRollStatus =
   | "RESERVED"
   | "SHIPPED"
   | "RETURNED"
+  | "VOIDED"
   | "SCRAP";
 
 export type FabricRoll = {

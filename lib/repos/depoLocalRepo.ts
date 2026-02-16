@@ -21,11 +21,20 @@ type AddRollPayload = {
   note?: string;
 };
 
+type EditRollPayload = {
+  variantId?: string;
+  colorName?: string;
+  meters?: number;
+  rollNo?: string;
+  note?: string;
+};
+
 const ROLL_STATUSES: FabricRollStatus[] = [
   "IN_STOCK",
   "RESERVED",
   "SHIPPED",
   "RETURNED",
+  "VOIDED",
   "SCRAP",
 ];
 
@@ -208,6 +217,10 @@ export const depoLocalRepo = {
       .sort((a, b) => toTimestamp(b.inAt) - toTimestamp(a.inAt));
   },
 
+  getRoll(rollId: string): FabricRoll | undefined {
+    return readRolls().find((roll) => roll.id === rollId);
+  },
+
   addRoll(payload: AddRollPayload): FabricRoll {
     const nextRoll: FabricRoll = {
       id: createId(),
@@ -289,11 +302,77 @@ export const depoLocalRepo = {
     });
   },
 
+  voidRoll(rollId: string, dateISO: string, reason?: string): FabricRoll | undefined {
+    const outAt = toIsoDate(dateISO, "dateISO");
+    const normalizedReason = normalizeText(reason);
+
+    return updateRoll(rollId, (roll) => {
+      if (roll.status !== "IN_STOCK") return null;
+      const auditNote = normalizedReason
+        ? `VOID: ${normalizedReason}`
+        : "VOID: Manuel kaldirma";
+
+      return {
+        ...roll,
+        status: "VOIDED",
+        outAt,
+        reservedFor: undefined,
+        reservedAt: undefined,
+        counterparty: undefined,
+        note: roll.note ? `${roll.note} | ${auditNote}` : auditNote,
+      };
+    });
+  },
+
+  editRoll(rollId: string, payload: EditRollPayload): FabricRoll | undefined {
+    return updateRoll(rollId, (roll) => {
+      if (roll.status === "SHIPPED") return null;
+      if (roll.status === "VOIDED") return null;
+      if (roll.status === "SCRAP") return null;
+
+      const nextMeters =
+        payload.meters === undefined ? roll.meters : normalizeMeters(payload.meters);
+      const nextRollNo =
+        payload.rollNo === undefined ? roll.rollNo : normalizeText(payload.rollNo);
+      const nextVariantId =
+        payload.variantId === undefined ? roll.variantId : normalizeText(payload.variantId);
+      const nextColorName =
+        payload.colorName === undefined ? roll.colorName : normalizeText(payload.colorName);
+
+      return {
+        ...roll,
+        meters: nextMeters,
+        rollNo: nextRollNo,
+        variantId: nextVariantId,
+        colorName: nextColorName,
+        note:
+          payload.note === undefined
+            ? roll.note
+            : normalizeText(payload.note),
+      };
+    });
+  },
+
+  scrapRoll(rollId: string, dateISO: string, reason?: string): FabricRoll | undefined {
+    const outAt = toIsoDate(dateISO, "dateISO");
+    return updateRoll(rollId, (roll) => {
+      if (roll.status === "SHIPPED") return null;
+      if (roll.status === "SCRAP") return null;
+
+      return {
+        ...roll,
+        status: "SCRAP",
+        outAt,
+        reservedFor: undefined,
+        reservedAt: undefined,
+        counterparty: undefined,
+        note: normalizeText(reason) ?? roll.note,
+      };
+    });
+  },
+
   deleteRollHard(rollId: string): boolean {
-    const rolls = readRolls();
-    const next = rolls.filter((roll) => roll.id !== rollId);
-    if (next.length === rolls.length) return false;
-    writeRolls(next);
-    return true;
+    void rollId;
+    return false;
   },
 };
