@@ -129,17 +129,29 @@ export default function DepoTransactionPrintPage() {
               <h1 className="text-2xl font-bold text-neutral-900">
                 {transaction.type === "SHIPMENT" ? "Sevk Fisi" : transaction.type === "RESERVATION" ? "Rezerv Fisi" : "Depo Islem Fisi"}
               </h1>
-              <div className="mt-2 space-y-1 text-sm text-neutral-700">
-                <div>Islem No: {transaction.id}</div>
-                <div>Tarih: {formatDateTime(transaction.createdAt)}</div>
-                <div>Musteri: {transaction.customerNameSnapshot ?? "-"}</div>
-                <div>Durum: {transaction.status === "REVERSED" ? "Iptal Edildi" : "Aktif"}</div>
+              <div className="mt-3 space-y-1 text-sm text-neutral-700">
+                <div>
+                  <span className="inline-block w-24 font-semibold text-neutral-600">İşlem No:</span>
+                  <span className="font-mono text-xs text-neutral-800">{transaction.id}</span>
+                </div>
+                <div>
+                  <span className="inline-block w-24 font-semibold text-neutral-600">Tarih:</span>
+                  <span>{formatDateTime(transaction.createdAt)}</span>
+                </div>
+                <div>
+                  <span className="inline-block w-24 font-semibold text-neutral-600">Müşteri:</span>
+                  <span>{transaction.customerNameSnapshot ?? "-"}</span>
+                </div>
+                <div>
+                  <span className="inline-block w-24 font-semibold text-neutral-600">Durum:</span>
+                  <span>{transaction.status === "REVERSED" ? "İptal Edildi" : "Aktif"}</span>
+                </div>
               </div>
             </header>
 
             <section className="space-y-4">
               {groupedByPattern.map((group) => (
-                <div key={group.key} className="pattern-block rounded-lg border border-black/10 p-3">
+                <div key={group.key} className="print-block rounded-lg border border-black/10 p-3">
                   <h2 className="text-base font-semibold text-neutral-900">
                     {group.patternNoSnapshot} - {group.patternNameSnapshot}
                   </h2>
@@ -175,7 +187,11 @@ export default function DepoTransactionPrintPage() {
             display: none !important;
           }
 
-          .pattern-block {
+          .print-sheet {
+            display: block !important;
+          }
+
+          .print-block {
             break-inside: avoid;
             page-break-inside: avoid;
           }

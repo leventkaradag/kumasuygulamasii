@@ -372,7 +372,10 @@ export const depoLocalRepo = {
   },
 
   deleteRollHard(rollId: string): boolean {
-    void rollId;
+    // HARD DELETE DISABLED. Use voidRoll + transactions.
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[depoLocalRepo] deleteRollHard blocked; returning false.", { rollId });
+    }
     return false;
   },
 };

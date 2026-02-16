@@ -18,12 +18,14 @@ type TransactionRow = {
   patternLabels: string[];
 };
 
-const transactionTypeLabel: Record<DepoTransactionType, string> = {
+const transactionTypeLabelMap: Record<DepoTransactionType, string> = {
   SHIPMENT: "Sevk",
   RESERVATION: "Rezerv",
-  REVERSAL: "Iptal/Geri Al",
-  ADJUSTMENT: "Duzeltme",
+  REVERSAL: "Geri Alındı",
+  ADJUSTMENT: "Düzeltme",
 };
+
+const getTransactionTypeLabel = (type: DepoTransactionType) => transactionTypeLabelMap[type];
 
 const fmt = (n: number) => n.toLocaleString("tr-TR", { maximumFractionDigits: 2 });
 
@@ -182,7 +184,7 @@ export default function SevkRezervBelgeleriPage() {
     if (target.status === "REVERSED") return;
     if (target.type !== "SHIPMENT" && target.type !== "RESERVATION") return;
 
-    if (!window.confirm(`${transactionTypeLabel[target.type]} islemini geri almak istiyor musunuz?`)) return;
+    if (!window.confirm(`${getTransactionTypeLabel(target.type)} islemini geri almak istiyor musunuz?`)) return;
 
     try {
       const createdAt = new Date().toISOString();
@@ -262,7 +264,7 @@ export default function SevkRezervBelgeleriPage() {
               <option value="ALL">Tip: Tumu</option>
               <option value="SHIPMENT">Tip: Sevk</option>
               <option value="RESERVATION">Tip: Rezerv</option>
-              <option value="CORRECTION">Tip: Iptal / Duzeltme</option>
+              <option value="CORRECTION">Tip: İptal / Düzeltme</option>
             </select>
             <input
               type="date"
@@ -314,7 +316,7 @@ export default function SevkRezervBelgeleriPage() {
                     <td className="px-3 py-2">{formatDateTime(row.transaction.createdAt)}</td>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span>{transactionTypeLabel[row.transaction.type]}</span>
+                        <span>{getTransactionTypeLabel(row.transaction.type)}</span>
                         {row.transaction.status === "REVERSED" ? (
                           <span className="rounded-full border border-rose-500/30 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700">
                             Iptal
@@ -376,7 +378,7 @@ export default function SevkRezervBelgeleriPage() {
             <div className="rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-neutral-700">
               <div>Islem Kodu: {detailRow.transaction.id}</div>
               <div>Tarih: {formatDateTime(detailRow.transaction.createdAt)}</div>
-              <div>Tip: {transactionTypeLabel[detailRow.transaction.type]}</div>
+              <div>Tip: {getTransactionTypeLabel(detailRow.transaction.type)}</div>
               <div>Musteri: {detailRow.transaction.customerNameSnapshot ?? "-"}</div>
               <div>Durum: {detailRow.transaction.status === "REVERSED" ? "Iptal" : "Aktif"}</div>
             </div>

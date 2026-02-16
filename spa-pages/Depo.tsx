@@ -68,7 +68,7 @@ const statusLabel: Record<FabricRollStatus, string> = {
   RESERVED: "Rezerve",
   SHIPPED: "Sevk",
   RETURNED: "Iade",
-  VOIDED: "Iptal",
+  VOIDED: "İptal (Yanlış giriş)",
   SCRAP: "Hurda",
 };
 
@@ -77,7 +77,7 @@ const statusClass: Record<FabricRollStatus, string> = {
   RESERVED: "border-amber-500/30 bg-amber-50 text-amber-700",
   SHIPPED: "border-sky-500/30 bg-sky-50 text-sky-700",
   RETURNED: "border-violet-500/30 bg-violet-50 text-violet-700",
-  VOIDED: "border-neutral-500/30 bg-neutral-100 text-neutral-700",
+  VOIDED: "border-slate-400/40 bg-slate-100 text-slate-700",
   SCRAP: "border-rose-500/30 bg-rose-50 text-rose-700",
 };
 const statusSortPriority: Record<FabricRollStatus, number> = {
@@ -125,6 +125,14 @@ const toIsoDate = (value: string, label: string) => {
 const toPositiveNumber = (value: string, label: string) => {
   const parsed = Number(value.trim().replace(",", "."));
   if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${label} 0'dan buyuk olmali`);
+  return parsed;
+};
+
+const toPositiveInt = (value: string, label: string) => {
+  const parsed = Number(value.trim());
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} 1 veya daha buyuk tam sayi olmali`);
+  }
   return parsed;
 };
 
@@ -240,6 +248,7 @@ export default function DepoPage() {
   const [addVariantId, setAddVariantId] = useState("__other");
   const [addColorName, setAddColorName] = useState("");
   const [addMeters, setAddMeters] = useState("");
+  const [addQty, setAddQty] = useState("1");
   const [addRollNo, setAddRollNo] = useState("");
   const [addDate, setAddDate] = useState(todayInput());
   const [addNote, setAddNote] = useState("");
@@ -529,6 +538,7 @@ export default function DepoPage() {
     setAddVariantId(selectedPattern.variants[0]?.id ?? "__other");
     setAddColorName("");
     setAddMeters("");
+    setAddQty("1");
     setAddRollNo("");
     setAddDate(todayInput());
     setAddNote("");
@@ -540,20 +550,43 @@ export default function DepoPage() {
     if (!selectedPattern) return;
     try {
       const meters = toPositiveNumber(addMeters, "Metre");
+      const qty = toPositiveInt(addQty, "Adet");
       const inAt = toIsoDate(addDate, "Giris tarihi");
       const variant = addVariantId !== "__other" ? selectedPattern.variants.find((item) => item.id === addVariantId) : undefined;
       const colorName = addVariantId === "__other" ? addColorName.trim() : variant?.colorName ?? variant?.name ?? "";
+      const baseRollNo = addRollNo.trim();
       if (!colorName && !variant) throw new Error("Renk seciniz.");
 
-      depoLocalRepo.addRoll({
-        patternId: selectedPattern.id,
-        variantId: variant?.id,
-        colorName: colorName || undefined,
-        meters,
-        rollNo: addRollNo.trim() || undefined,
-        inAt,
-        note: addNote.trim() || undefined,
-      });
+      let addedCount = 0;
+      for (let index = 0; index < qty; index += 1) {
+        const rollNo =
+          !baseRollNo
+            ? undefined
+            : index === 0
+              ? baseRollNo
+              : `${baseRollNo}-${index + 1}`;
+
+        try {
+          depoLocalRepo.addRoll({
+            patternId: selectedPattern.id,
+            variantId: variant?.id,
+            colorName: colorName || undefined,
+            meters,
+            rollNo,
+            inAt,
+            note: addNote.trim() || undefined,
+          });
+          addedCount += 1;
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : "Bilinmeyen hata";
+          if (addedCount === 0) {
+            throw error;
+          }
+          setAddError(`${addedCount}/${qty} top eklendi. Kalani eklenemedi: ${reason}`);
+          refreshData(selectedPattern.id);
+          return;
+        }
+      }
       setAddOpen(false);
       refreshData(selectedPattern.id);
     } catch (error) {
@@ -1278,8 +1311,9 @@ export default function DepoPage() {
           <div className="mt-4 space-y-3">
             <select value={addVariantId} onChange={(e) => setAddVariantId(e.target.value)} className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary">{selectedPattern.variants.map((variant) => <option key={variant.id} value={variant.id}>{variantName(variant)}</option>)}<option value="__other">Diger (serbest renk)</option></select>
             {addVariantId === "__other" ? <input type="text" value={addColorName} onChange={(e) => setAddColorName(e.target.value)} placeholder="Renk adi" className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" /> : null}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-3">
               <input type="number" min="0" step="0.01" value={addMeters} onChange={(e) => setAddMeters(e.target.value)} placeholder="Metre" className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
+              <input type="number" min="1" step="1" value={addQty} onChange={(e) => setAddQty(e.target.value)} placeholder="Adet (Top)" className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
               <input type="text" value={addRollNo} onChange={(e) => setAddRollNo(e.target.value)} placeholder="Roll No (ops)" className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
             </div>
             <input type="date" value={addDate} onChange={(e) => setAddDate(e.target.value)} className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
