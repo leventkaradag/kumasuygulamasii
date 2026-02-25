@@ -48,6 +48,7 @@ type RollGroup = {
 type SelectedLineDraft = {
   rowKey: string;
   patternId: string;
+  variantId?: string | null;
   patternNoSnapshot: string;
   patternNameSnapshot: string;
   color: string;
@@ -55,6 +56,19 @@ type SelectedLineDraft = {
   topCount: number;
   totalMetres: number;
   rollIds: string[];
+};
+
+type BasketItem = {
+  key: string;
+  patternId: string;
+  variantId?: string | null;
+  rollIds: string[];
+  patternNoSnapshot: string;
+  patternNameSnapshot: string;
+  color: string;
+  metrePerTop: number;
+  topCount: number;
+  totalMetres: number;
 };
 
 type HistoryRow = {
@@ -256,6 +270,7 @@ export default function DepoPage() {
 
   const [selectedByRowKey, setSelectedByRowKey] = useState<Record<string, number>>({});
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
+  const [basketItems, setBasketItems] = useState<BasketItem[]>([]);
 
   const [bulkActionType, setBulkActionType] = useState<BulkActionType | null>(null);
   const [bulkCustomerInput, setBulkCustomerInput] = useState("");
@@ -450,20 +465,21 @@ export default function DepoPage() {
     return map;
   }, [allGroups]);
 
-  const selectedCount = useMemo(
-    () => Object.values(selectedByRowKey).reduce((total, value) => total + (value > 0 ? value : 0), 0),
-    [selectedByRowKey]
+  const selectedRollSet = useMemo(
+    () => new Set(basketItems.flatMap((item) => item.rollIds)),
+    [basketItems]
   );
-  const selectedMeters = useMemo(
-    () =>
-      Object.entries(selectedByRowKey).reduce((total, [rowKey, value]) => {
-        if (value <= 0) return total;
-        const group = allGroupsByKey.get(rowKey);
-        if (!group) return total;
-        return total + value * group.meters;
-      }, 0),
-    [selectedByRowKey, allGroupsByKey]
-  );
+
+  const selectableCountByRowKey = useMemo(() => {
+    const map = new Map<string, number>();
+    allGroups.forEach((group) => {
+      const selectableCount = group.inStockRolls.filter(
+        (roll) => !selectedRollSet.has(roll.id)
+      ).length;
+      map.set(group.key, selectableCount);
+    });
+    return map;
+  }, [allGroups, selectedRollSet]);
 
   const selectedLineDrafts = useMemo(() => {
     const drafts: SelectedLineDraft[] = [];
@@ -471,30 +487,68 @@ export default function DepoPage() {
       if (value <= 0) return;
       const group = allGroupsByKey.get(rowKey);
       if (!group) return;
-      const topCount = Math.min(value, group.availableCount);
+      const selectableRolls = group.inStockRolls.filter(
+        (roll) => !selectedRollSet.has(roll.id)
+      );
+      const topCount = Math.min(value, selectableRolls.length);
       if (topCount <= 0) return;
+      const candidateRolls = selectableRolls.slice(0, topCount);
+      const variantIdSet = new Set(
+        candidateRolls
+          .map((roll) => roll.variantId)
+          .filter((variantId): variantId is string => Boolean(variantId))
+      );
+      const variantId = variantIdSet.size === 1 ? Array.from(variantIdSet)[0] : null;
       drafts.push({
         rowKey,
         patternId: group.patternId,
+        variantId,
         patternNoSnapshot: group.patternNoSnapshot,
         patternNameSnapshot: group.patternNameSnapshot,
         color: group.colorName,
         metrePerTop: group.meters,
         topCount,
         totalMetres: topCount * group.meters,
-        rollIds: group.inStockRolls.slice(0, topCount).map((roll) => roll.id),
+        rollIds: candidateRolls.map((roll) => roll.id),
       });
     });
     return drafts;
-  }, [selectedByRowKey, allGroupsByKey]);
+  }, [selectedByRowKey, allGroupsByKey, selectedRollSet]);
+
+  const selectedCount = useMemo(
+    () => selectedLineDrafts.reduce((total, draft) => total + draft.topCount, 0),
+    [selectedLineDrafts]
+  );
+  const selectedMeters = useMemo(
+    () => selectedLineDrafts.reduce((total, draft) => total + draft.totalMetres, 0),
+    [selectedLineDrafts]
+  );
+
+  const basketSummary = useMemo(() => {
+    const patternSet = new Set<string>();
+    let totalTops = 0;
+    let totalMetres = 0;
+
+    basketItems.forEach((item) => {
+      patternSet.add(item.patternId);
+      totalTops += item.topCount;
+      totalMetres += item.totalMetres;
+    });
+
+    return {
+      patternCount: patternSet.size,
+      totalTops,
+      totalMetres,
+    };
+  }, [basketItems]);
 
   useEffect(() => {
     setSelectedByRowKey((current) => {
       const next: Record<string, number> = {};
       Object.entries(current).forEach(([rowKey, value]) => {
-        const group = allGroupsByKey.get(rowKey);
-        if (!group) return;
-        const clamped = Math.max(0, Math.min(group.availableCount, value));
+        const selectableCount = selectableCountByRowKey.get(rowKey);
+        if (selectableCount === undefined) return;
+        const clamped = Math.max(0, Math.min(selectableCount, value));
         if (clamped > 0) next[rowKey] = clamped;
       });
       const sameLength = Object.keys(next).length === Object.keys(current).length;
@@ -503,7 +557,7 @@ export default function DepoPage() {
         Object.entries(next).every(([key, value]) => (current[key] ?? 0) === value);
       return isSame ? current : next;
     });
-  }, [allGroupsByKey]);
+  }, [selectableCountByRowKey]);
 
   useEffect(() => {
     const groupKeys = new Set(renderedGroups.map((group) => group.key));
@@ -620,8 +674,66 @@ export default function DepoPage() {
     });
   };
 
+  const handleAddSelectionToBasket = () => {
+    if (selectedLineDrafts.length === 0) {
+      setBulkWarning("Sepete eklenecek uygun top bulunamadi.");
+      return;
+    }
+
+    setBasketItems((current) => {
+      const map = new Map<string, BasketItem>();
+      current.forEach((item) => {
+        map.set(item.key, { ...item, rollIds: [...item.rollIds] });
+      });
+
+      selectedLineDrafts.forEach((line) => {
+        const existing = map.get(line.rowKey);
+        if (!existing) {
+          map.set(line.rowKey, {
+            key: line.rowKey,
+            patternId: line.patternId,
+            variantId: line.variantId ?? null,
+            rollIds: [...line.rollIds],
+            patternNoSnapshot: line.patternNoSnapshot,
+            patternNameSnapshot: line.patternNameSnapshot,
+            color: line.color,
+            metrePerTop: line.metrePerTop,
+            topCount: line.topCount,
+            totalMetres: line.totalMetres,
+          });
+          return;
+        }
+
+        const mergedRollIds = Array.from(
+          new Set([...existing.rollIds, ...line.rollIds])
+        );
+        const topCount = mergedRollIds.length;
+        map.set(line.rowKey, {
+          ...existing,
+          variantId: existing.variantId ?? line.variantId ?? null,
+          rollIds: mergedRollIds,
+          topCount,
+          totalMetres: topCount * existing.metrePerTop,
+        });
+      });
+
+      return Array.from(map.values());
+    });
+
+    setSelectedByRowKey({});
+    setBulkWarning("");
+  };
+
+  const handleRemoveBasketItem = (itemKey: string) => {
+    setBasketItems((current) => current.filter((item) => item.key !== itemKey));
+  };
+
+  const handleClearBasket = () => {
+    setBasketItems([]);
+  };
+
   const openBulkModal = (type: BulkActionType) => {
-    if (selectedCount <= 0) return;
+    if (basketSummary.totalTops <= 0) return;
     setBulkActionType(type);
     setBulkCustomerInput("");
     setBulkCustomerId(null);
@@ -649,8 +761,8 @@ export default function DepoPage() {
 
   const handleBulkActionConfirm = () => {
     if (!bulkActionType) return;
-    if (selectedLineDrafts.length === 0) {
-      setBulkError("Secili top bulunamadi.");
+    if (basketItems.length === 0) {
+      setBulkError("Sevk sepeti bos.");
       return;
     }
 
@@ -665,8 +777,9 @@ export default function DepoPage() {
       const createdAt = new Date().toISOString();
       const lineInputs: Array<Omit<DepoTransactionLine, "id" | "transactionId">> = [];
       let failedRollCount = 0;
+      const failedItemLabels: string[] = [];
 
-      selectedLineDrafts.forEach((lineDraft) => {
+      basketItems.forEach((lineDraft) => {
         const successRollIds: string[] = [];
 
         lineDraft.rollIds.forEach((rollId) => {
@@ -690,11 +803,21 @@ export default function DepoPage() {
             totalMetres: successRollIds.length * lineDraft.metrePerTop,
             rollIds: successRollIds,
           });
+        } else {
+          failedItemLabels.push(
+            `${lineDraft.patternNoSnapshot} - ${lineDraft.patternNameSnapshot}`
+          );
         }
       });
 
       if (lineInputs.length === 0) {
-        throw new Error("Islem uygulanamadi. Secili toplar guncellenemedi.");
+        const failedInfo =
+          failedItemLabels.length > 0
+            ? ` Basarisiz kalem(ler): ${Array.from(new Set(failedItemLabels)).join(", ")}.`
+            : "";
+        throw new Error(
+          `Islem uygulanamadi. Secili toplar guncellenemedi.${failedInfo} Yenileyip tekrar deneyin.`
+        );
       }
 
       depoTransactionsLocalRepo.createTransaction({
@@ -706,9 +829,16 @@ export default function DepoPage() {
         lines: lineInputs,
       });
 
-      if (failedRollCount > 0) setBulkWarning(`${failedRollCount} top isleme alinamadi.`);
+      if (failedRollCount > 0) {
+        const failedInfo =
+          failedItemLabels.length > 0
+            ? ` Kalem: ${Array.from(new Set(failedItemLabels)).join(", ")}.`
+            : "";
+        setBulkWarning(`${failedRollCount} top isleme alinamadi.${failedInfo} Yenileyip tekrar deneyin.`);
+      }
       else setBulkWarning("");
 
+      setBasketItems([]);
       setSelectedByRowKey({});
       closeBulkModal();
       refreshData(selectedPattern?.id ?? null);
@@ -1062,36 +1192,83 @@ export default function DepoPage() {
                       <select value={rollStatus} onChange={(e) => setRollStatus(e.target.value as FabricRollStatus | "")} className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"><option value="">Tum Durumlar</option><option value="IN_STOCK">Stokta</option><option value="RESERVED">Rezerve</option></select>
                     </div>
                   </div>
-                  {selectedCount > 0 ? (
-                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-500/30 bg-sky-50 px-3 py-2 text-sm text-sky-900">
-                      <span className="font-semibold">
-                        Secili: {selectedCount} top / {fmt(selectedMeters)} m
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-sm text-neutral-800">
+                    <span className="font-semibold">
+                      Anlik Secim: {selectedCount} top / {fmt(selectedMeters)} m
+                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleAddSelectionToBasket}
+                        disabled={selectedCount <= 0}
+                        className="rounded-lg border border-sky-500/40 bg-white px-2.5 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Kalem Ekle (Desen Ekle)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedByRowKey({})}
+                        className="rounded-lg border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                      >
+                        Secimi Temizle
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 rounded-lg border border-sky-500/30 bg-sky-50 px-3 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <span className="text-sm font-semibold text-sky-900">
+                        Sevk Sepeti • Secili Desen: {basketSummary.patternCount} • Secili Top: {basketSummary.totalTops} • Toplam Metre: {fmt(basketSummary.totalMetres)}
                       </span>
                       <div className="flex flex-wrap items-center gap-2">
                         <button
                           type="button"
                           onClick={() => openBulkModal("SHIPMENT")}
-                          className="rounded-lg border border-sky-500/40 bg-white px-2.5 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+                          disabled={basketSummary.totalTops <= 0}
+                          className="rounded-lg border border-sky-500/40 bg-white px-2.5 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Toplu Sevk Et
                         </button>
                         <button
                           type="button"
                           onClick={() => openBulkModal("RESERVATION")}
-                          className="rounded-lg border border-amber-500/40 bg-white px-2.5 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-100"
+                          disabled={basketSummary.totalTops <= 0}
+                          className="rounded-lg border border-amber-500/40 bg-white px-2.5 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Toplu Rezerv Yap
                         </button>
                         <button
                           type="button"
-                          onClick={() => setSelectedByRowKey({})}
-                          className="rounded-lg border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                          onClick={handleClearBasket}
+                          disabled={basketSummary.totalTops <= 0}
+                          className="rounded-lg border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
                         >
-                          Secimi Temizle
+                          Sepeti Temizle
                         </button>
                       </div>
                     </div>
-                  ) : null}
+
+                    {basketItems.length > 0 ? (
+                      <div className="mt-2 max-h-28 overflow-auto rounded border border-sky-500/20 bg-white/80 p-2 text-xs text-sky-900">
+                        {basketItems.map((item) => (
+                          <div key={item.key} className="mb-1 flex items-center justify-between gap-2 last:mb-0">
+                            <span>
+                              {item.patternNoSnapshot} / {item.color} / {fmt(item.metrePerTop)} m - {item.topCount} top
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveBasketItem(item.key)}
+                              className="rounded border border-rose-500/30 bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100"
+                            >
+                              Kaldir
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-xs text-sky-700">Sepet bos.</p>
+                    )}
+                  </div>
                   {bulkWarning ? <p className="mt-2 text-xs font-medium text-rose-700">{bulkWarning}</p> : null}
                   <div className="mt-3 overflow-auto rounded-lg border border-black/10">
                     <table className="w-full text-left text-sm">
@@ -1099,19 +1276,24 @@ export default function DepoPage() {
                       <tbody className="text-neutral-800">
                         {renderedGroups.map((group) => {
                           const selectedForGroup = selectedByRowKey[group.key] ?? 0;
+                          const selectableCount = selectableCountByRowKey.get(group.key) ?? 0;
+                          const basketedCount = group.availableCount - selectableCount;
                           return (
                             <Fragment key={group.key}>
                               <tr className="border-t border-black/5">
                                 <td className="px-3 py-2 font-medium">{group.colorName}</td>
                                 <td className="px-3 py-2">{fmt(group.meters)} m</td>
                                 <td className="px-3 py-2">{group.totalCount} top ({fmt(group.totalMeters)} m)</td>
-                                <td className="px-3 py-2">{group.availableCount} top ({fmt(group.availableMeters)} m)</td>
+                                <td className="px-3 py-2">
+                                  {selectableCount} top ({fmt(selectableCount * group.meters)} m)
+                                  {basketedCount > 0 ? <span className="ml-1 text-[11px] text-sky-700">Sepette: {basketedCount}</span> : null}
+                                </td>
                                 <td className="px-3 py-2">{group.reservedCount} top ({fmt(group.reservedMeters)} m)</td>
                                 <td className="px-3 py-2">
                                   <div className="inline-flex items-center gap-2 rounded-lg border border-black/10 px-2 py-1">
                                     <button
                                       type="button"
-                                      onClick={() => setRowSelectionCount(group.key, selectedForGroup - 1, group.availableCount)}
+                                      onClick={() => setRowSelectionCount(group.key, selectedForGroup - 1, selectableCount)}
                                       disabled={selectedForGroup <= 0}
                                       className="h-6 w-6 rounded border border-black/10 text-sm font-semibold text-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
                                     >
@@ -1120,8 +1302,8 @@ export default function DepoPage() {
                                     <span className="min-w-8 text-center text-sm font-semibold text-neutral-800">{selectedForGroup}</span>
                                     <button
                                       type="button"
-                                      onClick={() => setRowSelectionCount(group.key, selectedForGroup + 1, group.availableCount)}
-                                      disabled={selectedForGroup >= group.availableCount}
+                                      onClick={() => setRowSelectionCount(group.key, selectedForGroup + 1, selectableCount)}
+                                      disabled={selectedForGroup >= selectableCount}
                                       className="h-6 w-6 rounded border border-black/10 text-sm font-semibold text-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
                                     >
                                       +
@@ -1161,9 +1343,16 @@ export default function DepoPage() {
                                               <tr key={roll.id} className="border-t border-black/5">
                                                 <td className="px-2 py-1.5">{roll.rollNo ?? roll.id.slice(0, 8)}</td>
                                                 <td className="px-2 py-1.5">
-                                                  <span className={cn("inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-semibold", statusClass[roll.status])}>
-                                                    {statusLabel[roll.status]}
-                                                  </span>
+                                                  <div className="flex flex-wrap items-center gap-1">
+                                                    <span className={cn("inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-semibold", statusClass[roll.status])}>
+                                                      {statusLabel[roll.status]}
+                                                    </span>
+                                                    {selectedRollSet.has(roll.id) ? (
+                                                      <span className="inline-flex rounded-full border border-sky-500/30 bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">
+                                                        Sepette
+                                                      </span>
+                                                    ) : null}
+                                                  </div>
                                                 </td>
                                                 <td className="px-2 py-1.5">{formatDateTime(roll.inAt)}</td>
                                                 <td className="px-2 py-1.5">{roll.reservedFor ?? roll.counterparty ?? "-"}</td>
@@ -1334,11 +1523,13 @@ export default function DepoPage() {
           size="lg"
         >
           <div className="space-y-3">
-            <p className="text-sm text-neutral-600">Secili: {selectedCount} top / {fmt(selectedMeters)} m</p>
+            <p className="text-sm text-neutral-600">
+              Sepet: {basketSummary.patternCount} desen / {basketSummary.totalTops} top / {fmt(basketSummary.totalMetres)} m
+            </p>
             <div className="max-h-32 overflow-auto rounded-lg border border-black/10 bg-neutral-50 px-3 py-2">
               <div className="space-y-1 text-xs text-neutral-700">
-                {selectedLineDrafts.map((line) => (
-                  <div key={line.rowKey}>
+                {basketItems.map((line) => (
+                  <div key={line.key}>
                     {line.patternNoSnapshot} / {line.color} / {fmt(line.metrePerTop)} m - {line.topCount} top
                   </div>
                 ))}
