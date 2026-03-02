@@ -12,8 +12,12 @@ export type PatternMetersTarget = "AUTO" | "URETIM" | "STOK" | "BOYAHANE" | "HAT
 
 export type UpsertPatternFromFormPayload = Pick<
   Pattern,
-  "fabricCode" | "fabricName" | "weaveType" | "warpCount" | "weftCount" | "totalEnds" | "currentStage"
+  "fabricCode" | "fabricName" | "weaveType" | "warpCount" | "weftCount" | "totalEnds"
 > & {
+  currentStage?: Stage;
+  color?: string;
+  imageDigital?: string | null;
+  imageFinal?: string | null;
   metersToAdd?: number;
   metersTarget?: PatternMetersTarget;
 };
@@ -65,6 +69,14 @@ const isCompletePattern = (override: PatternPatch): override is Pattern => {
 };
 
 const normalizeText = (value: string) => value.trim();
+const normalizeOptionalText = (value?: string | null) => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+};
+const normalizeImage = (value?: string | null) => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+};
 
 const normalizePartiNos = (value: unknown): string[] => {
   if (!Array.isArray(value)) return [];
@@ -82,6 +94,11 @@ const withPatternDefaults = (pattern: Pattern): Pattern => ({
   ...pattern,
   createdAt: normalizeCreatedAt(pattern.createdAt),
   partiNos: normalizePartiNos(pattern.partiNos),
+  color: normalizeOptionalText(pattern.color),
+  imageDigital: normalizeImage(pattern.imageDigital ?? pattern.digitalImageUrl),
+  imageFinal: normalizeImage(pattern.imageFinal ?? pattern.finalImageUrl),
+  digitalImageUrl: normalizeOptionalText(pattern.digitalImageUrl ?? pattern.imageDigital),
+  finalImageUrl: normalizeOptionalText(pattern.finalImageUrl ?? pattern.imageFinal),
 });
 
 const normalizeMeters = (value?: number) => {
@@ -182,6 +199,7 @@ const mergePatterns = (base: Pattern[], overrides: Record<string, PatternPatch>)
 
 const buildNewPattern = (payload: UpsertPatternFromFormPayload): Pattern => {
   const fabricCode = normalizeText(payload.fabricCode);
+  const currentStage = payload.currentStage ?? "DEPO";
 
   return {
     id: fabricCode,
@@ -194,11 +212,16 @@ const buildNewPattern = (payload: UpsertPatternFromFormPayload): Pattern => {
     totalEnds: normalizeText(payload.totalEnds),
     variants: [],
     partiNos: [],
-    currentStage: payload.currentStage,
+    currentStage,
     totalProducedMeters: 0,
     stockMeters: 0,
     defectMeters: 0,
     inDyehouseMeters: 0,
+    color: normalizeOptionalText(payload.color),
+    imageDigital: normalizeImage(payload.imageDigital),
+    imageFinal: normalizeImage(payload.imageFinal),
+    digitalImageUrl: normalizeOptionalText(payload.imageDigital),
+    finalImageUrl: normalizeOptionalText(payload.imageFinal),
   };
 };
 
@@ -249,14 +272,18 @@ const upsertWithBaseProvider = (
   const warpCount = normalizeText(payload.warpCount);
   const weftCount = normalizeText(payload.weftCount);
   const totalEnds = normalizeText(payload.totalEnds);
+  const color = normalizeOptionalText(payload.color);
+  const imageDigital = normalizeImage(payload.imageDigital);
+  const imageFinal = normalizeImage(payload.imageFinal);
   const metersToAdd = normalizeMeters(payload.metersToAdd);
-  const metersTarget = resolveMetersTarget(payload.metersTarget ?? "AUTO", payload.currentStage);
 
   const overrides = readOverrides();
   const mergedPatterns = mergePatterns(baseProvider.list(), overrides);
   const existingPattern = mergedPatterns.find(
     (pattern) => pattern.fabricCode === fabricCode || pattern.id === fabricCode
   );
+  const currentStage = payload.currentStage ?? existingPattern?.currentStage ?? "DEPO";
+  const metersTarget = resolveMetersTarget(payload.metersTarget ?? "AUTO", currentStage);
 
   const nextBase = existingPattern ?? buildNewPattern(payload);
   const nextPatternBeforeMeters: Pattern = {
@@ -269,13 +296,22 @@ const upsertWithBaseProvider = (
     warpCount,
     weftCount,
     totalEnds,
-    currentStage: payload.currentStage,
+    currentStage,
     totalProducedMeters: nextBase.totalProducedMeters ?? 0,
     stockMeters: nextBase.stockMeters ?? 0,
     defectMeters: nextBase.defectMeters ?? 0,
     inDyehouseMeters: nextBase.inDyehouseMeters ?? 0,
     variants: nextBase.variants ?? [],
     partiNos: nextBase.partiNos ?? [],
+    color: color ?? nextBase.color,
+    imageDigital:
+      imageDigital ?? normalizeImage(nextBase.imageDigital ?? nextBase.digitalImageUrl),
+    imageFinal: imageFinal ?? normalizeImage(nextBase.imageFinal ?? nextBase.finalImageUrl),
+    digitalImageUrl:
+      imageDigital ??
+      normalizeOptionalText(nextBase.digitalImageUrl ?? nextBase.imageDigital),
+    finalImageUrl:
+      imageFinal ?? normalizeOptionalText(nextBase.finalImageUrl ?? nextBase.imageFinal),
   };
 
   const nextPattern = incrementMeters(nextPatternBeforeMeters, metersTarget, metersToAdd);

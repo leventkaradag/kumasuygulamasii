@@ -41,6 +41,8 @@ const entry = (
   stockMeters: meters.stock,
   defectMeters: meters.defect,
   inDyehouseMeters: meters.dyehouse,
+  imageDigital: images?.digital ?? null,
+  imageFinal: images?.final ?? null,
   digitalImageUrl: images?.digital,
   finalImageUrl: images?.final,
 });

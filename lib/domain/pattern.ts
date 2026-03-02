@@ -31,11 +31,14 @@ export type Pattern = {
   depoNo?: string;
   kg?: number;
   eniCm?: number;
+  color?: string;
   currentStage: Stage;
   totalProducedMeters: number;
   stockMeters: number;
   defectMeters: number;
   inDyehouseMeters: number;
+  imageDigital?: string | null;
+  imageFinal?: string | null;
   digitalImageUrl?: string;
   finalImageUrl?: string;
   note?: string;

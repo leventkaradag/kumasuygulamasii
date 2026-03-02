@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useMemo, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from "react";
 import Image from "next/image";
 
 import Layout from "../components/Layout";
@@ -15,10 +15,7 @@ import type {
 } from "@/lib/domain/weaving";
 import { dyehouseLocalRepo } from "@/lib/repos/dyehouseLocalRepo";
 import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
-import {
-  ensurePatternByCodeAndNameAndImage,
-  weavingLocalRepo,
-} from "@/lib/repos/weavingLocalRepo";
+import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
 
 const fmt = (value: number) =>
   value.toLocaleString("tr-TR", { maximumFractionDigits: 2 });
@@ -60,11 +57,21 @@ const toPositiveNumber = (value: string, label: string) => {
 const sortPatterns = (patterns: Pattern[]) =>
   [...patterns].sort((a, b) => a.fabricCode.localeCompare(b.fabricCode, "tr-TR"));
 
-const getPatternImage = (pattern: Pattern) => pattern.finalImageUrl ?? pattern.digitalImageUrl;
+const getPatternImage = (pattern: Pattern) =>
+  pattern.imageFinal ?? pattern.finalImageUrl ?? pattern.imageDigital ?? pattern.digitalImageUrl;
 
 const transferDestinationLabel: Record<WeavingTransferDestination, string> = {
   DYEHOUSE: "Boyahane",
   WAREHOUSE: "Depo",
+};
+
+const composeCountAndYarn = (count: string, yarn: string) => {
+  const countValue = count.trim();
+  const yarnValue = yarn.trim();
+  if (countValue && yarnValue) return `${countValue}/${yarnValue}`;
+  if (countValue) return countValue;
+  if (yarnValue) return yarnValue;
+  return "";
 };
 
 type PlanTotals = {
@@ -77,6 +84,38 @@ type PlanTotals = {
 };
 
 type PatternSelectorTab = "SELECT" | "NEW";
+
+type NewPatternForm = {
+  code: string;
+  name: string;
+  weaveType: string;
+  color: string;
+  warpCountValue: string;
+  warpYarnValue: string;
+  weftCountValue: string;
+  weftYarnValue: string;
+  totalEnds: string;
+  imageDigital: string | null;
+  imageFinal: string | null;
+  digitalPreviewUrl: string | null;
+  finalPreviewUrl: string | null;
+};
+
+const createEmptyNewPatternForm = (): NewPatternForm => ({
+  code: "",
+  name: "",
+  weaveType: "",
+  color: "",
+  warpCountValue: "",
+  warpYarnValue: "",
+  weftCountValue: "",
+  weftYarnValue: "",
+  totalEnds: "",
+  imageDigital: null,
+  imageFinal: null,
+  digitalPreviewUrl: null,
+  finalPreviewUrl: null,
+});
 
 export default function Dokuma() {
   const [plans, setPlans] = useState<WeavingPlan[]>(() => weavingLocalRepo.listPlans());
@@ -92,18 +131,19 @@ export default function Dokuma() {
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>(() => dyehouseLocalRepo.list());
 
   const [planModalOpen, setPlanModalOpen] = useState(false);
+  const [planModalStep, setPlanModalStep] = useState<"form" | "select">("form");
   const [selectedPatternId, setSelectedPatternId] = useState("");
   const [plannedMetersInput, setPlannedMetersInput] = useState("");
   const [planNote, setPlanNote] = useState("");
   const [planError, setPlanError] = useState("");
 
-  const [patternSelectorOpen, setPatternSelectorOpen] = useState(false);
   const [patternSelectorTab, setPatternSelectorTab] = useState<PatternSelectorTab>("SELECT");
   const [patternSearch, setPatternSearch] = useState("");
-  const [newPatternCode, setNewPatternCode] = useState("");
-  const [newPatternName, setNewPatternName] = useState("");
-  const [newPatternImageDataUrl, setNewPatternImageDataUrl] = useState<string | null>(null);
+  const [newPatternForm, setNewPatternForm] = useState<NewPatternForm>(() =>
+    createEmptyNewPatternForm()
+  );
   const [patternSelectorError, setPatternSelectorError] = useState("");
+  const [patternSelectorSuccess, setPatternSelectorSuccess] = useState("");
 
   const [progressPlanId, setProgressPlanId] = useState<string | null>(null);
   const [progressDateTime, setProgressDateTime] = useState(nowDateTimeLocal());
@@ -252,8 +292,28 @@ export default function Dokuma() {
     return "";
   }, [selectedTransferPlan, transferMetersInput, planTotalsById]);
 
+  useEffect(() => {
+    return () => {
+      if (newPatternForm.digitalPreviewUrl) {
+        URL.revokeObjectURL(newPatternForm.digitalPreviewUrl);
+      }
+      if (newPatternForm.finalPreviewUrl) {
+        URL.revokeObjectURL(newPatternForm.finalPreviewUrl);
+      }
+    };
+  }, [newPatternForm.digitalPreviewUrl, newPatternForm.finalPreviewUrl]);
+
+  const resetNewPatternForm = () => {
+    setNewPatternForm((prev) => {
+      if (prev.digitalPreviewUrl) URL.revokeObjectURL(prev.digitalPreviewUrl);
+      if (prev.finalPreviewUrl) URL.revokeObjectURL(prev.finalPreviewUrl);
+      return createEmptyNewPatternForm();
+    });
+  };
+
   const openPlanModal = () => {
     setPlanModalOpen(true);
+    setPlanModalStep("form");
     setSelectedPatternId((current) => {
       if (current && patterns.some((pattern) => pattern.id === current)) return current;
       return patterns[0]?.id ?? "";
@@ -261,63 +321,134 @@ export default function Dokuma() {
     setPlannedMetersInput("");
     setPlanNote("");
     setPlanError("");
+    setPatternSelectorError("");
+    setPatternSelectorSuccess("");
+    setPatternSelectorTab("SELECT");
+    setPatternSearch("");
+    resetNewPatternForm();
   };
 
   const closePlanModal = () => {
     setPlanModalOpen(false);
-    setPatternSelectorOpen(false);
+    setPlanModalStep("form");
     setPlanError("");
+    setPatternSelectorError("");
+    setPatternSelectorSuccess("");
+    setPatternSearch("");
+    setPatternSelectorTab("SELECT");
+    resetNewPatternForm();
   };
 
   const openPatternSelector = () => {
-    setPatternSelectorOpen(true);
+    setPlanModalStep("select");
     setPatternSelectorTab("SELECT");
     setPatternSearch("");
     setPatternSelectorError("");
+    setPatternSelectorSuccess("");
   };
 
   const closePatternSelector = () => {
-    setPatternSelectorOpen(false);
+    setPlanModalStep("form");
     setPatternSelectorError("");
+    setPatternSelectorSuccess("");
   };
 
-  const handlePatternImageChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const handleDigitalFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
     if (!file) {
-      setNewPatternImageDataUrl(null);
       return;
     }
 
+    const previewUrl = URL.createObjectURL(file);
+    setNewPatternForm((prev) => {
+      if (prev.digitalPreviewUrl) URL.revokeObjectURL(prev.digitalPreviewUrl);
+      return {
+        ...prev,
+        digitalPreviewUrl: previewUrl,
+      };
+    });
+
     const reader = new FileReader();
     reader.onload = () => {
-      if (typeof reader.result !== "string") {
+      const dataUrl = reader.result;
+      if (typeof dataUrl !== "string") {
         setPatternSelectorError("Gorsel okunamadi.");
         return;
       }
-      setNewPatternImageDataUrl(reader.result);
+      setNewPatternForm((prev) => ({
+        ...prev,
+        imageDigital: dataUrl,
+      }));
       setPatternSelectorError("");
     };
     reader.onerror = () => {
       setPatternSelectorError("Gorsel okunamadi.");
     };
     reader.readAsDataURL(file);
+    event.currentTarget.value = "";
+  };
+
+  const handleFinalFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    setNewPatternForm((prev) => {
+      if (prev.finalPreviewUrl) URL.revokeObjectURL(prev.finalPreviewUrl);
+      return {
+        ...prev,
+        finalPreviewUrl: previewUrl,
+      };
+    });
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      if (typeof dataUrl !== "string") {
+        setPatternSelectorError("Gorsel okunamadi.");
+        return;
+      }
+      setNewPatternForm((prev) => ({
+        ...prev,
+        imageFinal: dataUrl,
+      }));
+      setPatternSelectorError("");
+    };
+    reader.onerror = () => {
+      setPatternSelectorError("Gorsel okunamadi.");
+    };
+    reader.readAsDataURL(file);
+    event.currentTarget.value = "";
   };
 
   const handleCreatePatternFromSelector = () => {
     try {
-      const created = ensurePatternByCodeAndNameAndImage(
-        newPatternCode,
-        newPatternName,
-        newPatternImageDataUrl ?? undefined
-      );
+      const normalizedCode = newPatternForm.code.trim();
+      if (!normalizedCode) throw new Error("Kumas kodu zorunlu.");
+
+      const created = patternsLocalRepo.upsertPatternFromForm({
+        fabricCode: normalizedCode,
+        fabricName: newPatternForm.name.trim() || normalizedCode,
+        weaveType: newPatternForm.weaveType.trim() || "-",
+        warpCount:
+          composeCountAndYarn(newPatternForm.warpCountValue, newPatternForm.warpYarnValue) || "-",
+        weftCount:
+          composeCountAndYarn(newPatternForm.weftCountValue, newPatternForm.weftYarnValue) || "-",
+        totalEnds: newPatternForm.totalEnds.trim() || "-",
+        color: newPatternForm.color.trim() || undefined,
+        imageDigital: newPatternForm.imageDigital,
+        imageFinal: newPatternForm.imageFinal,
+      });
       refreshData();
       setSelectedPatternId(created.id);
-      setPatternSelectorOpen(false);
+      setPlanModalStep("form");
       setPatternSelectorError("");
-      setNewPatternCode("");
-      setNewPatternName("");
-      setNewPatternImageDataUrl(null);
+      setPatternSelectorSuccess("Desen oluşturuldu ve seçildi.");
+      resetNewPatternForm();
     } catch (error) {
+      setPatternSelectorSuccess("");
       setPatternSelectorError(
         error instanceof Error ? error.message : "Yeni desen kaydedilemedi."
       );
@@ -643,229 +774,409 @@ export default function Dokuma() {
       </div>
 
       {planModalOpen ? (
-        <Modal title="Dokuma Plani Olustur" onClose={closePlanModal}>
-          <div className="space-y-3">
-            <div className="rounded-lg border border-black/10 bg-neutral-50 p-3">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
-                Secili Desen
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 px-4"
+          onClick={closePlanModal}
+        >
+          <div
+            className="max-h-[85vh] w-full max-w-2xl overflow-auto rounded-2xl bg-white p-6 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-4 flex items-start justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-neutral-900">Dokuma Planı Oluştur</h2>
+                <p className="text-sm text-neutral-500">
+                  {planModalStep === "form"
+                    ? "Seçilen desen için plan metre kaydı oluşturulur."
+                    : "Desen seçip plan formuna geri dönebilirsiniz."}
+                </p>
               </div>
-              {selectedPattern ? (
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <PatternImagePreview pattern={selectedPattern} compact />
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-neutral-900">
-                        {selectedPattern.fabricCode}
-                      </div>
-                      <div className="truncate text-xs text-neutral-600">
-                        {selectedPattern.fabricName}
-                      </div>
+              <button
+                type="button"
+                onClick={closePlanModal}
+                className="rounded-lg px-2 py-1 text-sm text-neutral-500 hover:bg-neutral-100"
+              >
+                Kapat
+              </button>
+            </div>
+
+            {planModalStep === "form" ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2 rounded-lg border border-black/10 bg-neutral-50 p-3">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                      Secili Desen
                     </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={openPatternSelector}
-                    className="shrink-0 rounded border border-black/10 bg-white px-2 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
-                  >
-                    Deseni Degistir
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm text-neutral-600">Henuz desen secilmedi.</p>
-                  <button
-                    type="button"
-                    onClick={openPatternSelector}
-                    className="rounded border border-black/10 bg-white px-2 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
-                  >
-                    Desen Sec
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={plannedMetersInput}
-              onChange={(event) => setPlannedMetersInput(event.target.value)}
-              placeholder="Plan metre"
-              className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
-            />
-            <textarea
-              value={planNote}
-              onChange={(event) => setPlanNote(event.target.value)}
-              rows={3}
-              placeholder="Not (opsiyonel)"
-              className="w-full resize-none rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
-            />
-          </div>
-          {planError ? <p className="mt-3 text-sm text-rose-600">{planError}</p> : null}
-          <div className="mt-4 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={closePlanModal}
-              className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100"
-            >
-              Vazgec
-            </button>
-            <button
-              type="button"
-              onClick={handleCreatePlan}
-              className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
-            >
-              Kaydet
-            </button>
-          </div>
-        </Modal>
-      ) : null}
-
-      {patternSelectorOpen ? (
-        <Modal title="Desen Secici" onClose={closePatternSelector} size="xl">
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setPatternSelectorTab("SELECT")}
-                className={cn(
-                  "rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
-                  patternSelectorTab === "SELECT"
-                    ? "border-coffee-primary bg-coffee-primary/10 text-coffee-primary"
-                    : "border-black/10 bg-white text-neutral-700 hover:bg-neutral-100"
-                )}
-              >
-                Desen Sec
-              </button>
-              <button
-                type="button"
-                onClick={() => setPatternSelectorTab("NEW")}
-                className={cn(
-                  "rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
-                  patternSelectorTab === "NEW"
-                    ? "border-coffee-primary bg-coffee-primary/10 text-coffee-primary"
-                    : "border-black/10 bg-white text-neutral-700 hover:bg-neutral-100"
-                )}
-              >
-                Yeni Desen
-              </button>
-            </div>
-
-            {patternSelectorTab === "SELECT" ? (
-              <div className="space-y-2">
-                <input
-                  type="search"
-                  value={patternSearch}
-                  onChange={(event) => setPatternSearch(event.target.value)}
-                  placeholder="Kod veya ad ile ara"
-                  className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
-                />
-                <div className="max-h-[48vh] space-y-2 overflow-auto rounded-lg border border-black/10 bg-neutral-50 p-2">
-                  {filteredPatternsForSelector.map((pattern) => (
-                    <button
-                      key={pattern.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedPatternId(pattern.id);
-                        closePatternSelector();
-                      }}
-                      className={cn(
-                        "flex w-full items-center gap-3 rounded-lg border bg-white p-2 text-left transition",
-                        selectedPatternId === pattern.id
-                          ? "border-coffee-primary bg-coffee-primary/5"
-                          : "border-black/10 hover:border-coffee-primary/40"
-                      )}
-                    >
-                      <PatternImagePreview pattern={pattern} compact />
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-neutral-900">
-                          {pattern.fabricCode}
+                    {selectedPattern ? (
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <PatternImagePreview pattern={selectedPattern} compact />
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-neutral-900">
+                              {selectedPattern.fabricCode}
+                            </div>
+                            <div className="truncate text-xs text-neutral-600">
+                              {selectedPattern.fabricName}
+                            </div>
+                          </div>
                         </div>
-                        <div className="truncate text-xs text-neutral-600">{pattern.fabricName}</div>
+                        <button
+                          type="button"
+                          onClick={openPatternSelector}
+                          className="shrink-0 rounded border border-black/10 bg-white px-2 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                        >
+                          Deseni Degistir
+                        </button>
                       </div>
-                    </button>
-                  ))}
-                  {filteredPatternsForSelector.length === 0 ? (
-                    <div className="rounded-lg border border-dashed border-black/10 bg-white px-3 py-8 text-center text-sm text-neutral-500">
-                      Eslesen desen bulunamadi.
-                    </div>
-                  ) : null}
+                    ) : (
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm text-neutral-600">Henuz desen secilmedi.</p>
+                        <button
+                          type="button"
+                          onClick={openPatternSelector}
+                          className="rounded border border-black/10 bg-white px-2 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                        >
+                          Desen Sec
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <label className="space-y-1 text-sm text-neutral-700">
+                    <span>Plan Metre</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={plannedMetersInput}
+                      onChange={(event) => setPlannedMetersInput(event.target.value)}
+                      placeholder="0"
+                      className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                    />
+                  </label>
+                  <div />
+
+                  <label className="col-span-2 space-y-1 text-sm text-neutral-700">
+                    <span>Not (opsiyonel)</span>
+                    <textarea
+                      value={planNote}
+                      onChange={(event) => setPlanNote(event.target.value)}
+                      rows={3}
+                      placeholder="Not (opsiyonel)"
+                      className="w-full resize-none rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                    />
+                  </label>
+                </div>
+
+                {planError ? <p className="text-sm text-red-600">{planError}</p> : null}
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={closePlanModal}
+                    className="rounded-lg px-3 py-2 text-sm text-neutral-600 hover:bg-neutral-100"
+                  >
+                    İptal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCreatePlan}
+                    className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white hover:bg-coffee-primary/90"
+                  >
+                    Kaydet
+                  </button>
                 </div>
               </div>
             ) : (
-              <div className="space-y-3">
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <input
-                    type="text"
-                    value={newPatternCode}
-                    onChange={(event) => setNewPatternCode(event.target.value)}
-                    placeholder="Desen kodu"
-                    className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
-                  />
-                  <input
-                    type="text"
-                    value={newPatternName}
-                    onChange={(event) => setNewPatternName(event.target.value)}
-                    placeholder="Desen adi"
-                    className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
-                  />
-                </div>
+              <>
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPatternSelectorTab("SELECT");
+                        setPatternSelectorError("");
+                        setPatternSelectorSuccess("");
+                      }}
+                      className={cn(
+                        "rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
+                        patternSelectorTab === "SELECT"
+                          ? "border-coffee-primary bg-coffee-primary/10 text-coffee-primary"
+                          : "border-black/10 bg-white text-neutral-700 hover:bg-neutral-100"
+                      )}
+                    >
+                      Desen Sec
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPatternSelectorTab("NEW");
+                        setPatternSelectorError("");
+                        setPatternSelectorSuccess("");
+                      }}
+                      className={cn(
+                        "rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
+                        patternSelectorTab === "NEW"
+                          ? "border-coffee-primary bg-coffee-primary/10 text-coffee-primary"
+                          : "border-black/10 bg-white text-neutral-700 hover:bg-neutral-100"
+                      )}
+                    >
+                      Yeni Desen
+                    </button>
+                  </div>
 
-                <div className="space-y-2">
-                  <label className="block text-xs font-semibold uppercase tracking-wide text-neutral-500">
-                    Foto
-                  </label>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handlePatternImageChange}
-                    className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 file:mr-3 file:rounded file:border-0 file:bg-coffee-primary/10 file:px-2 file:py-1 file:text-xs file:font-semibold file:text-coffee-primary"
-                  />
-                  {newPatternImageDataUrl ? (
-                    <div className="inline-flex rounded-lg border border-black/10 bg-white p-2">
-                      <Image
-                        src={newPatternImageDataUrl}
-                        alt="Yeni desen onizleme"
-                        width={80}
-                        height={80}
-                        unoptimized
-                        className="h-20 w-20 rounded object-cover"
+                  {patternSelectorTab === "SELECT" ? (
+                    <div className="space-y-2">
+                      <input
+                        type="search"
+                        value={patternSearch}
+                        onChange={(event) => setPatternSearch(event.target.value)}
+                        placeholder="Kod veya ad ile ara"
+                        className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
                       />
+                      <div className="max-h-[48vh] space-y-2 overflow-auto rounded-lg border border-black/10 bg-neutral-50 p-2">
+                        {filteredPatternsForSelector.map((pattern) => (
+                          <button
+                            key={pattern.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedPatternId(pattern.id);
+                              setPlanModalStep("form");
+                              setPatternSelectorError("");
+                              setPatternSelectorSuccess("");
+                            }}
+                            className={cn(
+                              "flex w-full items-center gap-3 rounded-lg border bg-white p-2 text-left transition",
+                              selectedPatternId === pattern.id
+                                ? "border-coffee-primary bg-coffee-primary/5"
+                                : "border-black/10 hover:border-coffee-primary/40"
+                            )}
+                          >
+                            <PatternImagePreview pattern={pattern} compact />
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-semibold text-neutral-900">
+                                {pattern.fabricCode}
+                              </div>
+                              <div className="truncate text-xs text-neutral-600">{pattern.fabricName}</div>
+                            </div>
+                          </button>
+                        ))}
+                        {filteredPatternsForSelector.length === 0 ? (
+                          <div className="rounded-lg border border-dashed border-black/10 bg-white px-3 py-8 text-center text-sm text-neutral-500">
+                            Eslesen desen bulunamadi.
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   ) : (
-                    <div className="inline-flex h-20 w-20 items-center justify-center rounded-lg border border-dashed border-black/15 bg-neutral-50 text-xs text-neutral-500">
-                      Foto
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <label className="space-y-1 text-sm text-neutral-700">
+                          <span>Kumas Kodu</span>
+                          <input
+                            type="text"
+                            value={newPatternForm.code}
+                            onChange={(event) =>
+                              setNewPatternForm((prev) => ({
+                                ...prev,
+                                code: event.target.value,
+                              }))
+                            }
+                            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                          />
+                        </label>
+
+                        <label className="space-y-1 text-sm text-neutral-700">
+                          <span>Kumas Adi</span>
+                          <input
+                            type="text"
+                            value={newPatternForm.name}
+                            onChange={(event) =>
+                              setNewPatternForm((prev) => ({
+                                ...prev,
+                                name: event.target.value,
+                              }))
+                            }
+                            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                          />
+                        </label>
+
+                        <label className="space-y-1 text-sm text-neutral-700">
+                          <span>Dokuma Tipi</span>
+                          <input
+                            type="text"
+                            value={newPatternForm.weaveType}
+                            onChange={(event) =>
+                              setNewPatternForm((prev) => ({
+                                ...prev,
+                                weaveType: event.target.value,
+                              }))
+                            }
+                            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                          />
+                        </label>
+
+                        <label className="space-y-1 text-sm text-neutral-700">
+                          <span>Renk</span>
+                          <input
+                            type="text"
+                            value={newPatternForm.color}
+                            onChange={(event) =>
+                              setNewPatternForm((prev) => ({
+                                ...prev,
+                                color: event.target.value,
+                              }))
+                            }
+                            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                          />
+                        </label>
+
+                        <label className="space-y-1 text-sm text-neutral-700">
+                          <span>Cozgu</span>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input
+                              type="text"
+                              value={newPatternForm.warpCountValue}
+                              onChange={(event) =>
+                                setNewPatternForm((prev) => ({
+                                  ...prev,
+                                  warpCountValue: event.target.value,
+                                }))
+                              }
+                              placeholder="Sayi"
+                              className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                            />
+                            <input
+                              type="text"
+                              value={newPatternForm.warpYarnValue}
+                              onChange={(event) =>
+                                setNewPatternForm((prev) => ({
+                                  ...prev,
+                                  warpYarnValue: event.target.value,
+                                }))
+                              }
+                              placeholder="Iplik"
+                              className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                            />
+                          </div>
+                        </label>
+
+                        <label className="space-y-1 text-sm text-neutral-700">
+                          <span>Atki</span>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input
+                              type="text"
+                              value={newPatternForm.weftCountValue}
+                              onChange={(event) =>
+                                setNewPatternForm((prev) => ({
+                                  ...prev,
+                                  weftCountValue: event.target.value,
+                                }))
+                              }
+                              placeholder="Sayi"
+                              className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                            />
+                            <input
+                              type="text"
+                              value={newPatternForm.weftYarnValue}
+                              onChange={(event) =>
+                                setNewPatternForm((prev) => ({
+                                  ...prev,
+                                  weftYarnValue: event.target.value,
+                                }))
+                              }
+                              placeholder="Iplik"
+                              className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                            />
+                          </div>
+                        </label>
+
+                        <label className="space-y-1 text-sm text-neutral-700">
+                          <span>Toplam Tel</span>
+                          <input
+                            type="text"
+                            value={newPatternForm.totalEnds}
+                            onChange={(event) =>
+                              setNewPatternForm((prev) => ({
+                                ...prev,
+                                totalEnds: event.target.value,
+                              }))
+                            }
+                            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                          />
+                        </label>
+                        <div />
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <PatternUploadCard
+                          title="Dijital Foto"
+                          src={
+                            newPatternForm.digitalPreviewUrl ??
+                            newPatternForm.imageDigital ??
+                            selectedPattern?.imageDigital ??
+                            (selectedPattern as (Pattern & { image?: string | null }) | null)?.image ??
+                            selectedPattern?.digitalImageUrl ??
+                            null
+                          }
+                          onFileChange={handleDigitalFileChange}
+                          debugText={
+                            newPatternForm.digitalPreviewUrl ? "preview: OK" : "preview: empty"
+                          }
+                        />
+                        <PatternUploadCard
+                          title="Final Foto"
+                          src={
+                            newPatternForm.finalPreviewUrl ??
+                            newPatternForm.imageFinal ??
+                            selectedPattern?.imageFinal ??
+                            selectedPattern?.finalImageUrl ??
+                            null
+                          }
+                          onFileChange={handleFinalFileChange}
+                        />
+                      </div>
+
+                      <div className="flex justify-end pt-2">
+                        <button
+                          type="button"
+                          onClick={handleCreatePatternFromSelector}
+                          className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
+                        >
+                          Yeni Desen Kaydet ve Sec
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
 
-                <div className="flex justify-end">
+                {patternSelectorSuccess ? (
+                  <p className="mt-3 text-sm text-emerald-700">{patternSelectorSuccess}</p>
+                ) : null}
+                {patternSelectorError ? (
+                  <p className="mt-3 text-sm text-rose-600">{patternSelectorError}</p>
+                ) : null}
+
+                <div className="mt-4 flex justify-end gap-2">
                   <button
                     type="button"
-                    onClick={handleCreatePatternFromSelector}
-                    className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
+                    onClick={closePatternSelector}
+                    className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100"
                   >
-                    Yeni Desen Kaydet ve Sec
+                    Geri
+                  </button>
+                  <button
+                    type="button"
+                    onClick={closePlanModal}
+                    className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100"
+                  >
+                    Kapat
                   </button>
                 </div>
-              </div>
+              </>
             )}
           </div>
-
-          {patternSelectorError ? (
-            <p className="mt-3 text-sm text-rose-600">{patternSelectorError}</p>
-          ) : null}
-
-          <div className="mt-4 flex justify-end">
-            <button
-              type="button"
-              onClick={closePatternSelector}
-              className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100"
-            >
-              Kapat
-            </button>
-          </div>
-        </Modal>
+        </div>
       ) : null}
 
       {selectedProgressPlan ? (
@@ -1170,6 +1481,51 @@ function PatternImagePreview({ pattern, compact = false }: PatternImagePreviewPr
       unoptimized
       className={cn(sizeClass, "rounded-lg object-cover")}
     />
+  );
+}
+
+type PatternUploadCardProps = {
+  title: string;
+  src: string | null;
+  onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  debugText?: string;
+};
+
+function PatternUploadCard({
+  title,
+  src,
+  onFileChange,
+  debugText,
+}: PatternUploadCardProps) {
+  return (
+    <div className="space-y-2 rounded-lg border border-black/10 bg-white p-3">
+      <label className="block text-xs font-semibold uppercase tracking-wide text-neutral-500">
+        {title}
+      </label>
+      <div className="flex items-start gap-3">
+        {src ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={src}
+            alt={`${title} onizleme`}
+            className="h-24 w-24 rounded-lg border border-black/10 object-cover"
+          />
+        ) : (
+          <div className="inline-flex h-24 w-24 items-center justify-center rounded-lg border border-dashed border-black/15 bg-neutral-50 text-xs text-neutral-500">
+            Fotograf yok
+          </div>
+        )}
+        <div className="pt-0.5 space-y-1">
+          <input
+            type="file"
+            accept="image/*"
+            onChange={onFileChange}
+            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 file:mr-3 file:rounded file:border-0 file:bg-coffee-primary/10 file:px-2 file:py-1 file:text-xs file:font-semibold file:text-coffee-primary"
+          />
+          {debugText ? <p className="text-[11px] text-neutral-500">{debugText}</p> : null}
+        </div>
+      </div>
+    </div>
   );
 }
 

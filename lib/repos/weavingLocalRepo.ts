@@ -287,8 +287,17 @@ export const ensurePatternByCodeAndNameAndImage = (
   });
 
   if (existing) {
-    if (imageDataUrl && !existing.digitalImageUrl && !existing.finalImageUrl) {
-      patternsLocalRepo.update(existing.id, { digitalImageUrl: imageDataUrl });
+    if (
+      imageDataUrl &&
+      !existing.digitalImageUrl &&
+      !existing.finalImageUrl &&
+      !existing.imageDigital &&
+      !existing.imageFinal
+    ) {
+      patternsLocalRepo.update(existing.id, {
+        digitalImageUrl: imageDataUrl,
+        imageDigital: imageDataUrl,
+      });
       return patternsLocalRepo.get(existing.id) ?? existing;
     }
     return existing;
@@ -305,7 +314,10 @@ export const ensurePatternByCodeAndNameAndImage = (
   });
 
   if (imageDataUrl) {
-    patternsLocalRepo.update(created.id, { digitalImageUrl: imageDataUrl });
+    patternsLocalRepo.update(created.id, {
+      digitalImageUrl: imageDataUrl,
+      imageDigital: imageDataUrl,
+    });
     return patternsLocalRepo.get(created.id) ?? created;
   }
 
