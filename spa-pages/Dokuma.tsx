@@ -218,6 +218,64 @@ const composeCountAndYarn = (count: string, yarn: string) => {
   return "";
 };
 
+type FabricDraft = {
+  color: string;
+  weave: string;
+  cozguSayi: string;
+  cozguIplik: string;
+  atkiSayi: string;
+  atkiIplik: string;
+  toplamTel: string;
+  tarakEniCm: string;
+};
+
+const normalizeDraftText = (value: string | null | undefined) => {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed || trimmed === "-" || trimmed === "--") return "";
+  return trimmed;
+};
+
+const splitCountAndYarn = (value: string | null | undefined) => {
+  const normalized = normalizeDraftText(value);
+  if (!normalized) return { count: "", yarn: "" };
+
+  const [count, ...yarnParts] = normalized.split("/");
+  return {
+    count: count?.trim() ?? "",
+    yarn: yarnParts.join("/").trim(),
+  };
+};
+
+const createFabricDraftFromPattern = (pattern: Pattern | null): FabricDraft => {
+  const warp = splitCountAndYarn(pattern?.warpCount);
+  const weft = splitCountAndYarn(pattern?.weftCount);
+  const tarakEniCm =
+    typeof pattern?.tarakEniCm === "number" && Number.isFinite(pattern.tarakEniCm)
+      ? String(pattern.tarakEniCm)
+      : "";
+
+  return {
+    color: normalizeDraftText(pattern?.color),
+    weave: normalizeDraftText(pattern?.weaveType),
+    cozguSayi: warp.count,
+    cozguIplik: warp.yarn,
+    atkiSayi: weft.count,
+    atkiIplik: weft.yarn,
+    toplamTel: normalizeDraftText(pattern?.totalEnds),
+    tarakEniCm,
+  };
+};
+
+const isFabricDraftEqual = (left: FabricDraft, right: FabricDraft) =>
+  left.color === right.color &&
+  left.weave === right.weave &&
+  left.cozguSayi === right.cozguSayi &&
+  left.cozguIplik === right.cozguIplik &&
+  left.atkiSayi === right.atkiSayi &&
+  left.atkiIplik === right.atkiIplik &&
+  left.toplamTel === right.toplamTel &&
+  left.tarakEniCm === right.tarakEniCm;
+
 type PlanTotals = {
   plannedMeters: number;
   wovenMeters: number;
@@ -2071,6 +2129,11 @@ function WeavingDetailContent({
   const [finalPreviewUrl, setFinalPreviewUrl] = useState<string | null>(null);
   const [photoError, setPhotoError] = useState("");
   const [photoSuccess, setPhotoSuccess] = useState("");
+  const [isEditingFabric, setIsEditingFabric] = useState(false);
+  const [fabricDraft, setFabricDraft] = useState<FabricDraft>(() =>
+    createFabricDraftFromPattern(pattern)
+  );
+  const [fabricSaveError, setFabricSaveError] = useState("");
   const digitalInputRef = useRef<HTMLInputElement | null>(null);
   const finalInputRef = useRef<HTMLInputElement | null>(null);
   const [variantEditorOpen, setVariantEditorOpen] = useState(false);
@@ -2123,6 +2186,16 @@ function WeavingDetailContent({
   const digitalSrc = normalizeImageSrc(digitalPreviewUrl ?? getPatternDigitalImage(pattern));
   const finalSrc = normalizeImageSrc(finalPreviewUrl ?? getPatternFinalImage(pattern));
   const fabricDetails = getFabricDetailItems(pattern);
+  const hasFabricChanges = useMemo(() => {
+    const current = createFabricDraftFromPattern(pattern);
+    return !isFabricDraftEqual(current, fabricDraft);
+  }, [pattern, fabricDraft]);
+
+  useEffect(() => {
+    setFabricDraft(createFabricDraftFromPattern(pattern));
+    setIsEditingFabric(false);
+    setFabricSaveError("");
+  }, [pattern?.id]);
 
   const savePatternImage = (target: "DIGITAL" | "FINAL", dataUrl: string) => {
     if (!pattern) throw new Error("Desen kaydi bulunamadi.");
@@ -2190,6 +2263,69 @@ function WeavingDetailContent({
       reader.readAsDataURL(file);
       event.currentTarget.value = "";
     };
+
+  const handleFabricDraftChange = (key: keyof FabricDraft, value: string) => {
+    setFabricDraft((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+  };
+
+  const openFabricEditor = () => {
+    setFabricDraft(createFabricDraftFromPattern(pattern));
+    setFabricSaveError("");
+    setIsEditingFabric(true);
+  };
+
+  const cancelFabricEdit = () => {
+    setFabricDraft(createFabricDraftFromPattern(pattern));
+    setFabricSaveError("");
+    setIsEditingFabric(false);
+  };
+
+  const saveFabricDetails = () => {
+    if (!pattern) return;
+
+    try {
+      const totalEndsInput = fabricDraft.toplamTel.trim().replace(",", ".");
+      const tarakEniInput = fabricDraft.tarakEniCm.trim().replace(",", ".");
+      const totalEndsParsed = totalEndsInput ? Number(totalEndsInput) : null;
+      const tarakEniParsed = tarakEniInput ? Number(tarakEniInput) : null;
+
+      if (totalEndsParsed !== null && (!Number.isFinite(totalEndsParsed) || totalEndsParsed < 0)) {
+        throw new Error("Toplam Tel negatif olamaz.");
+      }
+      if (tarakEniParsed !== null && (!Number.isFinite(tarakEniParsed) || tarakEniParsed < 0)) {
+        throw new Error("Tarak Eni (cm) negatif olamaz.");
+      }
+
+      const nextPatch: Partial<Pattern> = {
+        color: fabricDraft.color.trim() || undefined,
+        weaveType: fabricDraft.weave.trim() || "-",
+        warpCount:
+          composeCountAndYarn(fabricDraft.cozguSayi, fabricDraft.cozguIplik) || "-",
+        weftCount:
+          composeCountAndYarn(fabricDraft.atkiSayi, fabricDraft.atkiIplik) || "-",
+        totalEnds:
+          totalEndsParsed === null
+            ? "-"
+            : String(Math.max(0, Math.round(totalEndsParsed))),
+        tarakEniCm: tarakEniParsed === null ? null : Math.max(0, tarakEniParsed),
+      };
+
+      const updated = patternsLocalRepo.update(pattern.id, nextPatch);
+      if (!updated) throw new Error("Kumas detaylari kaydedilemedi.");
+
+      onPatternUpdated();
+      setFabricDraft(createFabricDraftFromPattern(updated));
+      setFabricSaveError("");
+      setIsEditingFabric(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Kumas detaylari kaydedilemedi.";
+      setFabricSaveError(message);
+      window.alert(message);
+    }
+  };
 
   const openVariantEditor = () => {
     const rows =
@@ -2344,10 +2480,143 @@ function WeavingDetailContent({
             </div>
 
             <div className="space-y-2 rounded-xl border border-black/10 bg-white p-3 text-sm text-neutral-700">
-              <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
-                Kumas Detaylari
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                  Kumas Detaylari
+                </div>
+                {!isEditingFabric ? (
+                  <button
+                    type="button"
+                    onClick={openFabricEditor}
+                    disabled={!pattern}
+                    className="rounded-lg border border-black/10 bg-neutral-50 px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Duzenle
+                  </button>
+                ) : (
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={cancelFabricEdit}
+                      className="rounded-lg border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                    >
+                      Iptal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={saveFabricDetails}
+                      disabled={!hasFabricChanges}
+                      className="rounded-lg bg-coffee-primary px-2.5 py-1 text-xs font-semibold text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Kaydet
+                    </button>
+                  </div>
+                )}
               </div>
-              {fabricDetails.length > 0 ? (
+
+              {isEditingFabric ? (
+                <div className="space-y-2">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="space-y-1 text-xs text-neutral-700">
+                      <span>Renk</span>
+                      <input
+                        type="text"
+                        value={fabricDraft.color}
+                        onChange={(event) => handleFabricDraftChange("color", event.target.value)}
+                        className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                      />
+                    </label>
+
+                    <label className="space-y-1 text-xs text-neutral-700">
+                      <span>Orgu</span>
+                      <input
+                        type="text"
+                        value={fabricDraft.weave}
+                        onChange={(event) => handleFabricDraftChange("weave", event.target.value)}
+                        className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                      />
+                    </label>
+
+                    <label className="space-y-1 text-xs text-neutral-700">
+                      <span>Cozgu Sayi</span>
+                      <input
+                        type="text"
+                        value={fabricDraft.cozguSayi}
+                        onChange={(event) =>
+                          handleFabricDraftChange("cozguSayi", event.target.value)
+                        }
+                        className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                      />
+                    </label>
+
+                    <label className="space-y-1 text-xs text-neutral-700">
+                      <span>Cozgu Iplik</span>
+                      <input
+                        type="text"
+                        value={fabricDraft.cozguIplik}
+                        onChange={(event) =>
+                          handleFabricDraftChange("cozguIplik", event.target.value)
+                        }
+                        className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                      />
+                    </label>
+
+                    <label className="space-y-1 text-xs text-neutral-700">
+                      <span>Atki Sayi</span>
+                      <input
+                        type="text"
+                        value={fabricDraft.atkiSayi}
+                        onChange={(event) => handleFabricDraftChange("atkiSayi", event.target.value)}
+                        className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                      />
+                    </label>
+
+                    <label className="space-y-1 text-xs text-neutral-700">
+                      <span>Atki Iplik</span>
+                      <input
+                        type="text"
+                        value={fabricDraft.atkiIplik}
+                        onChange={(event) =>
+                          handleFabricDraftChange("atkiIplik", event.target.value)
+                        }
+                        className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                      />
+                    </label>
+
+                    <label className="space-y-1 text-xs text-neutral-700">
+                      <span>Toplam Tel</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={fabricDraft.toplamTel}
+                        onChange={(event) => handleFabricDraftChange("toplamTel", event.target.value)}
+                        className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                      />
+                    </label>
+
+                    <label className="space-y-1 text-xs text-neutral-700">
+                      <span>Tarak Eni (cm)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={fabricDraft.tarakEniCm}
+                        onChange={(event) =>
+                          handleFabricDraftChange("tarakEniCm", event.target.value)
+                        }
+                        className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                      />
+                    </label>
+                  </div>
+                  <p className="text-xs text-neutral-500">
+                    Bu degisiklik desen kartini gunceller.
+                  </p>
+                  {fabricSaveError ? (
+                    <p className="text-xs font-medium text-rose-600">{fabricSaveError}</p>
+                  ) : null}
+                </div>
+              ) : fabricDetails.length > 0 ? (
                 <div className="space-y-1.5">
                   {fabricDetails.map((item) => (
                     <div
