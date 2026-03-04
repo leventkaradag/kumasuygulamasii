@@ -9,6 +9,7 @@ import type { Dyehouse } from "@/lib/domain/dyehouse";
 import type { Pattern } from "@/lib/domain/pattern";
 import type {
   WeavingPlan,
+  WeavingPlanStatus,
   WeavingPlanVariant,
   WeavingProgressEntry,
   WeavingTransfer,
@@ -291,6 +292,42 @@ type PlanTotals = {
   pendingToSend: number;
 };
 
+type PlanSortOption =
+  | "created_desc"
+  | "created_asc"
+  | "code_asc"
+  | "code_desc"
+  | "planned_desc"
+  | "woven_desc"
+  | "remaining_desc";
+
+const planSortOptions: Array<{ value: PlanSortOption; label: string }> = [
+  { value: "created_desc", label: "Eklenme Tarihi (Yeni -> Eski)" },
+  { value: "created_asc", label: "Eklenme Tarihi (Eski -> Yeni)" },
+  { value: "code_asc", label: "Desen Kodu (A -> Z)" },
+  { value: "code_desc", label: "Desen Kodu (Z -> A)" },
+  { value: "planned_desc", label: "Plan (Buyuk -> Kucuk)" },
+  { value: "woven_desc", label: "Dokunan (Buyuk -> Kucuk)" },
+  { value: "remaining_desc", label: "Kalan (Buyuk -> Kucuk)" },
+];
+
+const fallbackPlanTotals = (plan: WeavingPlan): PlanTotals => ({
+  plannedMeters: hasPlanVariants(plan)
+    ? sumPlanVariantPlannedMeters(plan.variants)
+    : plan.plannedMeters,
+  wovenMeters: 0,
+  totalSentMeters: 0,
+  sentToDyehouse: 0,
+  sentToWarehouse: 0,
+  remainingPlanned: hasPlanVariants(plan)
+    ? sumPlanVariantPlannedMeters(plan.variants)
+    : plan.plannedMeters,
+  pendingToSend: 0,
+});
+
+const resolvePlanTotals = (plan: WeavingPlan, totalsById: Map<string, PlanTotals>) =>
+  totalsById.get(plan.id) ?? fallbackPlanTotals(plan);
+
 const hasPlanVariants = (
   plan: WeavingPlan | null | undefined
 ): plan is WeavingPlan & { variants: WeavingPlanVariant[] } =>
@@ -388,6 +425,9 @@ export default function Dokuma() {
   const [transferNote, setTransferNote] = useState("");
   const [transferError, setTransferError] = useState("");
   const [detailPlanId, setDetailPlanId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | WeavingPlanStatus>("ALL");
+  const [sortKey, setSortKey] = useState<PlanSortOption>("created_desc");
 
   const refreshData = () => {
     setPlans(weavingLocalRepo.listPlans());
@@ -471,6 +511,68 @@ export default function Dokuma() {
       totalSent,
     };
   }, [plans, planTotalsById]);
+
+  const availableStatuses = useMemo<WeavingPlanStatus[]>(() => {
+    const all = new Set<WeavingPlanStatus>(["ACTIVE", "COMPLETED", "CANCELLED"]);
+    plans.forEach((plan) => all.add(plan.status));
+    return Array.from(all);
+  }, [plans]);
+
+  const filteredAndSortedPlans = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase("tr-TR");
+
+    const byStatus =
+      statusFilter === "ALL" ? plans : plans.filter((plan) => plan.status === statusFilter);
+
+    const byQuery =
+      normalizedQuery.length === 0
+        ? byStatus
+        : byStatus.filter((plan) => {
+            const patternMeta =
+              patterns.find((pattern) => pattern.id === plan.patternId) ?? null;
+            const code = (
+              plan.patternNoSnapshot ||
+              patternMeta?.fabricCode ||
+              ""
+            ).toLocaleLowerCase("tr-TR");
+            const name = (
+              plan.patternNameSnapshot ||
+              patternMeta?.fabricName ||
+              ""
+            ).toLocaleLowerCase("tr-TR");
+            return code.includes(normalizedQuery) || name.includes(normalizedQuery);
+          });
+
+    const getCreatedAtMs = (plan: WeavingPlan) => {
+      const parsed = new Date(plan.createdAt).getTime();
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    return [...byQuery].sort((a, b) => {
+      const totalsA = resolvePlanTotals(a, planTotalsById);
+      const totalsB = resolvePlanTotals(b, planTotalsById);
+
+      if (sortKey === "created_desc") {
+        return getCreatedAtMs(b) - getCreatedAtMs(a);
+      }
+      if (sortKey === "created_asc") {
+        return getCreatedAtMs(a) - getCreatedAtMs(b);
+      }
+      if (sortKey === "code_asc") {
+        return a.patternNoSnapshot.localeCompare(b.patternNoSnapshot, "tr-TR");
+      }
+      if (sortKey === "code_desc") {
+        return b.patternNoSnapshot.localeCompare(a.patternNoSnapshot, "tr-TR");
+      }
+      if (sortKey === "planned_desc") {
+        return totalsB.plannedMeters - totalsA.plannedMeters;
+      }
+      if (sortKey === "woven_desc") {
+        return totalsB.wovenMeters - totalsA.wovenMeters;
+      }
+      return totalsB.remainingPlanned - totalsA.remainingPlanned;
+    });
+  }, [plans, patterns, query, statusFilter, sortKey, planTotalsById]);
 
   const selectedPattern = useMemo(
     () => patterns.find((pattern) => pattern.id === selectedPatternId) ?? null,
@@ -1068,9 +1170,60 @@ export default function Dokuma() {
             </button>
           </div>
 
-          <div className="mt-3 max-h-[58vh] overflow-auto rounded-lg border border-black/10">
+          <div className="mt-3 grid gap-2 rounded-lg border border-black/10 bg-neutral-50 p-2 lg:grid-cols-[minmax(0,1fr)_170px_280px_auto]">
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Desen ara (kod/ad)..."
+              className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+            />
+
+            <select
+              value={statusFilter}
+              onChange={(event) =>
+                setStatusFilter(event.target.value as "ALL" | WeavingPlanStatus)
+              }
+              className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+            >
+              <option value="ALL">Tumu</option>
+              {availableStatuses.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={sortKey}
+              onChange={(event) => setSortKey(event.target.value as PlanSortOption)}
+              className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+            >
+              {planSortOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              onClick={() => {
+                setQuery("");
+                setStatusFilter("ALL");
+                setSortKey("created_desc");
+              }}
+              className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100"
+            >
+              Sifirla
+            </button>
+          </div>
+
+          <div className="mt-2 text-xs text-neutral-500">{filteredAndSortedPlans.length} plan</div>
+
+          <div className="mt-2 max-h-[520px] overflow-auto rounded-lg border border-black/10">
             <table className="w-full text-left text-sm">
-              <thead className="sticky top-0 bg-neutral-50 text-neutral-600">
+              <thead className="sticky top-0 z-10 bg-neutral-50 text-neutral-600">
                 <tr>
                   <th className="px-3 py-2 font-semibold">Desen</th>
                   <th className="px-3 py-2 font-semibold">Plan (m)</th>
@@ -1083,22 +1236,8 @@ export default function Dokuma() {
                 </tr>
               </thead>
               <tbody className="text-neutral-800">
-                {plans.map((plan) => {
-                  const totals =
-                    planTotalsById.get(plan.id) ??
-                    ({
-                      plannedMeters: hasPlanVariants(plan)
-                        ? sumPlanVariantPlannedMeters(plan.variants)
-                        : plan.plannedMeters,
-                      wovenMeters: 0,
-                      totalSentMeters: 0,
-                      sentToDyehouse: 0,
-                      sentToWarehouse: 0,
-                      remainingPlanned: hasPlanVariants(plan)
-                        ? sumPlanVariantPlannedMeters(plan.variants)
-                        : plan.plannedMeters,
-                      pendingToSend: 0,
-                    } satisfies PlanTotals);
+                {filteredAndSortedPlans.map((plan) => {
+                  const totals = resolvePlanTotals(plan, planTotalsById);
                   const isCancelled = plan.status === "CANCELLED";
                   const isManualCompleted =
                     plan.status === "COMPLETED" && Boolean(plan.manualCompletedAt);
@@ -1201,10 +1340,10 @@ export default function Dokuma() {
                     </tr>
                   );
                 })}
-                {plans.length === 0 ? (
+                {filteredAndSortedPlans.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="px-3 py-8 text-center text-sm text-neutral-500">
-                      Henuz dokuma plani yok.
+                      {plans.length === 0 ? "Henuz dokuma plani yok." : "Filtreye uygun plan yok."}
                     </td>
                   </tr>
                 ) : null}
