@@ -2,14 +2,17 @@
 
 import Link from "next/link";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { ExternalLink, Search } from "lucide-react";
 import Layout from "@/components/Layout";
 import { cn } from "@/lib/cn";
 import type { DepoTransaction, DepoTransactionLine, DepoTransactionType } from "@/lib/domain/depoTransaction";
 import { depoLocalRepo } from "@/lib/repos/depoLocalRepo";
 import { depoTransactionsLocalRepo } from "@/lib/repos/depoTransactionsLocalRepo";
+import type { WeavingDispatchDocument } from "@/lib/domain/weaving";
+import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
 
-type TypeFilter = "ALL" | "SHIPMENT" | "RESERVATION" | "CORRECTION";
+type TypeFilter = "ALL" | "SHIPMENT" | "RESERVATION" | "CORRECTION" | "WEAVING_DISPATCH";
 
 type TransactionRow = {
   transaction: DepoTransaction;
@@ -17,6 +20,16 @@ type TransactionRow = {
   totals: { totalTops: number; totalMetres: number; patternCount: number };
   patternLabels: string[];
 };
+
+type DispatchDocumentRow = {
+  document: WeavingDispatchDocument;
+  patternLabel: string;
+  totalRows: number;
+};
+
+type ListRow =
+  | { kind: "DEPO"; createdAt: string; data: TransactionRow }
+  | { kind: "DISPATCH"; createdAt: string; data: DispatchDocumentRow };
 
 const transactionTypeLabelMap: Record<DepoTransactionType, string> = {
   SHIPMENT: "Sevk",
@@ -89,16 +102,19 @@ const buildPatternLabels = (lines: DepoTransactionLine[]) => {
 export default function SevkRezervBelgeleriPage() {
   const [transactions, setTransactions] = useState<DepoTransaction[]>([]);
   const [lines, setLines] = useState<DepoTransactionLine[]>([]);
+  const [dispatchDocuments, setDispatchDocuments] = useState<WeavingDispatchDocument[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("ALL");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [detailTransactionId, setDetailTransactionId] = useState<string | null>(null);
+  const [detailDispatchDocumentId, setDetailDispatchDocumentId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
 
   const refreshData = () => {
     setTransactions(depoTransactionsLocalRepo.listTransactions());
     setLines(depoTransactionsLocalRepo.listLines());
+    setDispatchDocuments(weavingLocalRepo.listDispatchDocuments());
   };
 
   useEffect(() => {
@@ -131,50 +147,101 @@ export default function SevkRezervBelgeleriPage() {
     [transactions, linesByTransactionId]
   );
 
+  const dispatchRows = useMemo<DispatchDocumentRow[]>(
+    () =>
+      dispatchDocuments.map((document) => ({
+        document,
+        patternLabel: `${document.patternNoSnapshot} - ${document.patternNameSnapshot}`,
+        totalRows: document.variantLines?.length ?? 1,
+      })),
+    [dispatchDocuments]
+  );
+
+  const allListRows = useMemo<ListRow[]>(
+    () => [
+      ...allRows.map((row) => ({
+        kind: "DEPO" as const,
+        createdAt: row.transaction.createdAt,
+        data: row,
+      })),
+      ...dispatchRows.map((row) => ({
+        kind: "DISPATCH" as const,
+        createdAt: row.document.createdAt,
+        data: row,
+      })),
+    ],
+    [allRows, dispatchRows]
+  );
+
   const normalizedQuery = normalizeSearchToken(searchQuery);
   const fromBoundary = parseBoundary(dateFrom, false);
   const toBoundary = parseBoundary(dateTo, true);
 
   const filteredRows = useMemo(() => {
-    return allRows
+    return allListRows
       .filter((row) => {
-        if (typeFilter === "SHIPMENT" && row.transaction.type !== "SHIPMENT") return false;
-        if (typeFilter === "RESERVATION" && row.transaction.type !== "RESERVATION") return false;
-        if (
-          typeFilter === "CORRECTION" &&
-          row.transaction.type !== "REVERSAL" &&
-          row.transaction.type !== "ADJUSTMENT"
-        ) {
+        if (typeFilter === "WEAVING_DISPATCH" && row.kind !== "DISPATCH") return false;
+        if (row.kind === "DEPO") {
+          if (typeFilter === "SHIPMENT" && row.data.transaction.type !== "SHIPMENT") return false;
+          if (typeFilter === "RESERVATION" && row.data.transaction.type !== "RESERVATION") return false;
+          if (
+            typeFilter === "CORRECTION" &&
+            row.data.transaction.type !== "REVERSAL" &&
+            row.data.transaction.type !== "ADJUSTMENT"
+          ) {
+            return false;
+          }
+        } else if (typeFilter !== "ALL" && typeFilter !== "WEAVING_DISPATCH") {
           return false;
         }
 
-        const txTimestamp = toTimestamp(row.transaction.createdAt);
+        const txTimestamp = toTimestamp(row.createdAt);
         if (fromBoundary !== undefined && txTimestamp < fromBoundary) return false;
         if (toBoundary !== undefined && txTimestamp > toBoundary) return false;
 
         if (!normalizedQuery) return true;
 
-        const idToken = normalizedQuery.replace(/\s+/g, "");
-        if (row.transaction.id.toLocaleLowerCase("tr-TR").includes(idToken)) return true;
+        if (row.kind === "DEPO") {
+          const idToken = normalizedQuery.replace(/\s+/g, "");
+          if (row.data.transaction.id.toLocaleLowerCase("tr-TR").includes(idToken)) return true;
 
-        if (normalizeSearchToken(row.transaction.customerNameSnapshot ?? "").includes(normalizedQuery)) return true;
+          if (normalizeSearchToken(row.data.transaction.customerNameSnapshot ?? "").includes(normalizedQuery)) {
+            return true;
+          }
 
-        const matchesLine = row.lines.some((line) => {
+          return row.data.lines.some((line) => {
+            return (
+              normalizeSearchToken(line.patternNoSnapshot).includes(normalizedQuery) ||
+              normalizeSearchToken(line.patternNameSnapshot).includes(normalizedQuery) ||
+              normalizeSearchToken(line.color).includes(normalizedQuery)
+            );
+          });
+        }
+
+        const document = row.data.document;
+        if (normalizeSearchToken(document.docNo).includes(normalizedQuery)) return true;
+        if (normalizeSearchToken(document.destinationNameSnapshot).includes(normalizedQuery)) return true;
+        if (normalizeSearchToken(document.patternNoSnapshot).includes(normalizedQuery)) return true;
+        if (normalizeSearchToken(document.patternNameSnapshot).includes(normalizedQuery)) return true;
+        if (normalizeSearchToken(document.note ?? "").includes(normalizedQuery)) return true;
+        return (document.variantLines ?? []).some((line) => {
           return (
-            normalizeSearchToken(line.patternNoSnapshot).includes(normalizedQuery) ||
-            normalizeSearchToken(line.patternNameSnapshot).includes(normalizedQuery) ||
-            normalizeSearchToken(line.color).includes(normalizedQuery)
+            normalizeSearchToken(line.colorNameSnapshot).includes(normalizedQuery) ||
+            normalizeSearchToken(line.variantCodeSnapshot ?? "").includes(normalizedQuery)
           );
         });
-
-        return matchesLine;
       })
-      .sort((a, b) => toTimestamp(b.transaction.createdAt) - toTimestamp(a.transaction.createdAt));
-  }, [allRows, typeFilter, fromBoundary, toBoundary, normalizedQuery]);
+      .sort((a, b) => toTimestamp(b.createdAt) - toTimestamp(a.createdAt));
+  }, [allListRows, typeFilter, fromBoundary, toBoundary, normalizedQuery]);
 
   const detailRow = useMemo(
     () => allRows.find((row) => row.transaction.id === detailTransactionId) ?? null,
     [allRows, detailTransactionId]
+  );
+
+  const detailDispatchDocument = useMemo(
+    () => dispatchDocuments.find((document) => document.id === detailDispatchDocumentId) ?? null,
+    [dispatchDocuments, detailDispatchDocumentId]
   );
 
   const handleReverseTransaction = () => {
@@ -252,7 +319,7 @@ export default function SevkRezervBelgeleriPage() {
                 type="search"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Musteri / Desen / Islem Kodu ara..."
+                placeholder="Musteri / Boyahane / Desen / Belge No ara..."
                 className="w-full rounded-lg border border-black/10 bg-white px-10 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
               />
             </label>
@@ -265,6 +332,7 @@ export default function SevkRezervBelgeleriPage() {
               <option value="SHIPMENT">Tip: Sevk</option>
               <option value="RESERVATION">Tip: Rezerv</option>
               <option value="CORRECTION">Tip: İptal / Düzeltme</option>
+              <option value="WEAVING_DISPATCH">Tip: Dokuma/Boyahane Sevk Belgeleri</option>
             </select>
             <input
               type="date"
@@ -293,62 +361,113 @@ export default function SevkRezervBelgeleriPage() {
               <tr>
                 <th className="px-3 py-2 font-semibold">Tarih</th>
                 <th className="px-3 py-2 font-semibold">Tip</th>
-                <th className="px-3 py-2 font-semibold">Islem Kodu</th>
-                <th className="px-3 py-2 font-semibold">Musteri</th>
+                <th className="px-3 py-2 font-semibold">Belge / Islem Kodu</th>
+                <th className="px-3 py-2 font-semibold">Hedef / Musteri</th>
                 <th className="px-3 py-2 font-semibold">Desen(ler)</th>
-                <th className="px-3 py-2 font-semibold">Toplam</th>
+                <th className="px-3 py-2 font-semibold">Toplam Satir/Top</th>
                 <th className="px-3 py-2 font-semibold">Metre</th>
                 <th className="px-3 py-2 font-semibold">Aksiyon</th>
               </tr>
             </thead>
             <tbody className="text-neutral-800">
               {filteredRows.map((row) => {
-                const firstPattern = row.patternLabels[0];
-                const extraPatternCount = Math.max(0, row.patternLabels.length - 1);
-                return (
-                  <tr
-                    key={row.transaction.id}
-                    className={cn(
-                      "border-t border-black/5",
-                      row.transaction.status === "REVERSED" ? "opacity-60" : ""
-                    )}
-                  >
-                    <td className="px-3 py-2">{formatDateTime(row.transaction.createdAt)}</td>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span>{getTransactionTypeLabel(row.transaction.type)}</span>
-                        {row.transaction.status === "REVERSED" ? (
-                          <span className="rounded-full border border-rose-500/30 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700">
-                            Iptal
-                          </span>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs">{shortId(row.transaction.id)}</td>
-                    <td className="px-3 py-2">{row.transaction.customerNameSnapshot ?? "-"}</td>
-                    <td className="px-3 py-2">
-                      {firstPattern ? (
-                        <span>
-                          {firstPattern}
-                          {extraPatternCount > 0 ? ` +${extraPatternCount}` : ""}
-                        </span>
-                      ) : (
-                        "-"
+                if (row.kind === "DEPO") {
+                  const txRow = row.data;
+                  const firstPattern = txRow.patternLabels[0];
+                  const extraPatternCount = Math.max(0, txRow.patternLabels.length - 1);
+                  return (
+                    <tr
+                      key={txRow.transaction.id}
+                      className={cn(
+                        "border-t border-black/5",
+                        txRow.transaction.status === "REVERSED" ? "opacity-60" : ""
                       )}
+                    >
+                      <td className="px-3 py-2">{formatDateTime(txRow.transaction.createdAt)}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span>{getTransactionTypeLabel(txRow.transaction.type)}</span>
+                          {txRow.transaction.status === "REVERSED" ? (
+                            <span className="rounded-full border border-rose-500/30 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700">
+                              Iptal
+                            </span>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 font-mono text-xs">{shortId(txRow.transaction.id)}</td>
+                      <td className="px-3 py-2">{txRow.transaction.customerNameSnapshot ?? "-"}</td>
+                      <td className="px-3 py-2">
+                        {firstPattern ? (
+                          <span>
+                            {firstPattern}
+                            {extraPatternCount > 0 ? ` +${extraPatternCount}` : ""}
+                          </span>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                      <td className="px-3 py-2">{txRow.totals.totalTops}</td>
+                      <td className="px-3 py-2">{fmt(txRow.totals.totalMetres)} m</td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDetailDispatchDocumentId(null);
+                              setDetailTransactionId(txRow.transaction.id);
+                            }}
+                            className="rounded border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                          >
+                            Detay
+                          </button>
+                          <Link
+                            href={`/depo/islem/${txRow.transaction.id}/print`}
+                            target="_blank"
+                            className="inline-flex items-center gap-1 rounded border border-sky-500/30 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+                          >
+                            Yazdir
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </Link>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const dispatchRow = row.data;
+                return (
+                  <tr key={dispatchRow.document.id} className="border-t border-black/5">
+                    <td className="px-3 py-2">{formatDateTime(dispatchRow.document.createdAt)}</td>
+                    <td className="px-3 py-2">
+                      <span className="inline-flex rounded-full border border-sky-500/30 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700">
+                        {dispatchRow.document.type === "BOYAHANE_TO_DEPO"
+                          ? "Boyahane -> Depo Belgesi"
+                          : "Dokuma Sevk Belgesi"}
+                      </span>
                     </td>
-                    <td className="px-3 py-2">{row.totals.totalTops}</td>
-                    <td className="px-3 py-2">{fmt(row.totals.totalMetres)} m</td>
+                    <td className="px-3 py-2 font-mono text-xs">{dispatchRow.document.docNo}</td>
+                    <td className="px-3 py-2">
+                      {dispatchRow.document.destination === "BOYAHANE"
+                        ? `Boyahane: ${dispatchRow.document.destinationNameSnapshot}`
+                        : `Depo: ${dispatchRow.document.destinationNameSnapshot}`}
+                    </td>
+                    <td className="px-3 py-2">{dispatchRow.patternLabel}</td>
+                    <td className="px-3 py-2">{dispatchRow.totalRows}</td>
+                    <td className="px-3 py-2">{fmt(dispatchRow.document.metersTotal)} m</td>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => setDetailTransactionId(row.transaction.id)}
+                          onClick={() => {
+                            setDetailTransactionId(null);
+                            setDetailDispatchDocumentId(dispatchRow.document.id);
+                          }}
                           className="rounded border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
                         >
                           Detay
                         </button>
                         <Link
-                          href={`/depo/islem/${row.transaction.id}/print`}
+                          href={`/sevk/${dispatchRow.document.id}/print`}
                           target="_blank"
                           className="inline-flex items-center gap-1 rounded border border-sky-500/30 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
                         >
@@ -440,6 +559,95 @@ export default function SevkRezervBelgeleriPage() {
           </div>
         </Modal>
       ) : null}
+
+      {detailDispatchDocument ? (
+        <Modal
+          title={
+            detailDispatchDocument.type === "BOYAHANE_TO_DEPO"
+              ? "Boyahane -> Depo Cikis Belgesi"
+              : "Dokuma Sevk Belgesi"
+          }
+          onClose={() => setDetailDispatchDocumentId(null)}
+          size="xl"
+        >
+          <div className="space-y-3 text-sm">
+            <div className="rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-neutral-700">
+              <div>Belge No: {detailDispatchDocument.docNo}</div>
+              <div>Tarih: {formatDateTime(detailDispatchDocument.createdAt)}</div>
+              <div>
+                Hedef:{" "}
+                {detailDispatchDocument.destination === "BOYAHANE"
+                  ? `Boyahane - ${detailDispatchDocument.destinationNameSnapshot}`
+                  : `Depo - ${detailDispatchDocument.destinationNameSnapshot}`}
+              </div>
+              <div>
+                Desen: {detailDispatchDocument.patternNoSnapshot} - {detailDispatchDocument.patternNameSnapshot}
+              </div>
+            </div>
+
+            <div className="overflow-auto rounded-lg border border-black/10 bg-white">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-neutral-50 text-neutral-600">
+                  <tr>
+                    <th className="px-2 py-1.5 font-semibold">Desen</th>
+                    <th className="px-2 py-1.5 font-semibold">Varyant Kodu</th>
+                    <th className="px-2 py-1.5 font-semibold">Renk</th>
+                    <th className="px-2 py-1.5 font-semibold">Metre</th>
+                  </tr>
+                </thead>
+                <tbody className="text-neutral-700">
+                  {(detailDispatchDocument.variantLines && detailDispatchDocument.variantLines.length > 0
+                    ? detailDispatchDocument.variantLines
+                    : [
+                        {
+                          variantCodeSnapshot: "-",
+                          colorNameSnapshot: "-",
+                          meters: detailDispatchDocument.metersTotal,
+                        },
+                      ]
+                  ).map((line, index) => (
+                    <tr key={`${detailDispatchDocument.id}-${index}`} className="border-t border-black/5">
+                      <td className="px-2 py-1.5">
+                        {detailDispatchDocument.patternNoSnapshot} - {detailDispatchDocument.patternNameSnapshot}
+                      </td>
+                      <td className="px-2 py-1.5">{line.variantCodeSnapshot?.trim() || "-"}</td>
+                      <td className="px-2 py-1.5">{line.colorNameSnapshot}</td>
+                      <td className="px-2 py-1.5">{fmt(line.meters)} m</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-sm font-semibold text-neutral-900">
+              Genel Toplam: {fmt(detailDispatchDocument.metersTotal)} m
+            </div>
+            {detailDispatchDocument.note ? (
+              <div className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-700">
+                Not: {detailDispatchDocument.note}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <Link
+              href={`/sevk/${detailDispatchDocument.id}/print`}
+              target="_blank"
+              className="inline-flex items-center gap-1 rounded-lg border border-sky-500/30 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+            >
+              Yazdir
+              <ExternalLink className="h-4 w-4" />
+            </Link>
+            <button
+              type="button"
+              onClick={() => setDetailDispatchDocumentId(null)}
+              className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100"
+            >
+              Kapat
+            </button>
+          </div>
+        </Modal>
+      ) : null}
     </Layout>
   );
 }
@@ -455,15 +663,41 @@ function Modal({ title, children, onClose, size = "md" }: ModalProps) {
   const widthClass =
     size === "xl" ? "max-w-3xl" : size === "lg" ? "max-w-xl" : "max-w-md";
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mounted]);
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
       <div
-        className={cn("w-full rounded-2xl border border-black/10 bg-white p-5 shadow-2xl", widthClass)}
+        className={cn(
+          "w-full max-h-[85vh] overflow-hidden rounded-2xl border border-black/10 bg-white shadow-2xl",
+          widthClass
+        )}
         onClick={(event) => event.stopPropagation()}
       >
-        <h3 className="text-lg font-semibold text-neutral-900">{title}</h3>
-        <div className="mt-2">{children}</div>
+        <div className="max-h-[85vh] overflow-y-auto p-5">
+          <h3 className="text-lg font-semibold text-neutral-900">{title}</h3>
+          <div className="mt-2">{children}</div>
+        </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
