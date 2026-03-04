@@ -218,6 +218,11 @@ const composeCountAndYarn = (count: string, yarn: string) => {
   return "";
 };
 
+const normalizeCountAndYarn = (count: string, yarn: string): string | null => {
+  const value = composeCountAndYarn(count, yarn).trim();
+  return value ? value : null;
+};
+
 type FabricDraft = {
   color: string;
   weave: string;
@@ -2134,6 +2139,7 @@ function WeavingDetailContent({
     createFabricDraftFromPattern(pattern)
   );
   const [fabricSaveError, setFabricSaveError] = useState("");
+  const [fabricSaveSuccess, setFabricSaveSuccess] = useState("");
   const digitalInputRef = useRef<HTMLInputElement | null>(null);
   const finalInputRef = useRef<HTMLInputElement | null>(null);
   const [variantEditorOpen, setVariantEditorOpen] = useState(false);
@@ -2195,7 +2201,16 @@ function WeavingDetailContent({
     setFabricDraft(createFabricDraftFromPattern(pattern));
     setIsEditingFabric(false);
     setFabricSaveError("");
+    setFabricSaveSuccess("");
   }, [pattern?.id]);
+
+  useEffect(() => {
+    if (!fabricSaveSuccess) return;
+    const timeout = window.setTimeout(() => {
+      setFabricSaveSuccess("");
+    }, 1600);
+    return () => window.clearTimeout(timeout);
+  }, [fabricSaveSuccess]);
 
   const savePatternImage = (target: "DIGITAL" | "FINAL", dataUrl: string) => {
     if (!pattern) throw new Error("Desen kaydi bulunamadi.");
@@ -2274,12 +2289,14 @@ function WeavingDetailContent({
   const openFabricEditor = () => {
     setFabricDraft(createFabricDraftFromPattern(pattern));
     setFabricSaveError("");
+    setFabricSaveSuccess("");
     setIsEditingFabric(true);
   };
 
   const cancelFabricEdit = () => {
     setFabricDraft(createFabricDraftFromPattern(pattern));
     setFabricSaveError("");
+    setFabricSaveSuccess("");
     setIsEditingFabric(false);
   };
 
@@ -2298,14 +2315,20 @@ function WeavingDetailContent({
       if (tarakEniParsed !== null && (!Number.isFinite(tarakEniParsed) || tarakEniParsed < 0)) {
         throw new Error("Tarak Eni (cm) negatif olamaz.");
       }
+      const warpCountNormalized = normalizeCountAndYarn(
+        fabricDraft.cozguSayi,
+        fabricDraft.cozguIplik
+      );
+      const weftCountNormalized = normalizeCountAndYarn(
+        fabricDraft.atkiSayi,
+        fabricDraft.atkiIplik
+      );
 
       const nextPatch: Partial<Pattern> = {
         color: fabricDraft.color.trim() || undefined,
         weaveType: fabricDraft.weave.trim() || "-",
-        warpCount:
-          composeCountAndYarn(fabricDraft.cozguSayi, fabricDraft.cozguIplik) || "-",
-        weftCount:
-          composeCountAndYarn(fabricDraft.atkiSayi, fabricDraft.atkiIplik) || "-",
+        warpCount: (warpCountNormalized ?? null) as unknown as string,
+        weftCount: (weftCountNormalized ?? null) as unknown as string,
         totalEnds:
           totalEndsParsed === null
             ? "-"
@@ -2319,10 +2342,12 @@ function WeavingDetailContent({
       onPatternUpdated();
       setFabricDraft(createFabricDraftFromPattern(updated));
       setFabricSaveError("");
+      setFabricSaveSuccess("Kaydedildi.");
       setIsEditingFabric(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Kumas detaylari kaydedilemedi.";
       setFabricSaveError(message);
+      setFabricSaveSuccess("");
       window.alert(message);
     }
   };
@@ -2633,6 +2658,9 @@ function WeavingDetailContent({
                   Kumas detayi bulunamadi.
                 </div>
               )}
+              {fabricSaveSuccess ? (
+                <p className="text-xs font-medium text-emerald-700">{fabricSaveSuccess}</p>
+              ) : null}
             </div>
           </div>
 
