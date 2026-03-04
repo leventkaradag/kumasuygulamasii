@@ -15,6 +15,7 @@ export type UpsertPatternFromFormPayload = Pick<
   "fabricCode" | "fabricName" | "weaveType" | "warpCount" | "weftCount" | "totalEnds"
 > & {
   currentStage?: Stage;
+  tarakEniCm?: number | null;
   color?: string;
   imageDigital?: string | null;
   imageFinal?: string | null;
@@ -104,6 +105,16 @@ const withPatternDefaults = (pattern: Pattern): Pattern => ({
 const normalizeMeters = (value?: number) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+};
+
+const normalizeOptionalDimension = (
+  value?: number | null
+): number | null | undefined => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return numeric;
 };
 
 const resolveMetersTarget = (
@@ -200,6 +211,7 @@ const mergePatterns = (base: Pattern[], overrides: Record<string, PatternPatch>)
 const buildNewPattern = (payload: UpsertPatternFromFormPayload): Pattern => {
   const fabricCode = normalizeText(payload.fabricCode);
   const currentStage = payload.currentStage ?? "DEPO";
+  const tarakEniCm = normalizeOptionalDimension(payload.tarakEniCm);
 
   return {
     id: fabricCode,
@@ -217,6 +229,7 @@ const buildNewPattern = (payload: UpsertPatternFromFormPayload): Pattern => {
     stockMeters: 0,
     defectMeters: 0,
     inDyehouseMeters: 0,
+    tarakEniCm: tarakEniCm ?? null,
     color: normalizeOptionalText(payload.color),
     imageDigital: normalizeImage(payload.imageDigital),
     imageFinal: normalizeImage(payload.imageFinal),
@@ -276,6 +289,7 @@ const upsertWithBaseProvider = (
   const imageDigital = normalizeImage(payload.imageDigital);
   const imageFinal = normalizeImage(payload.imageFinal);
   const metersToAdd = normalizeMeters(payload.metersToAdd);
+  const tarakEniCm = normalizeOptionalDimension(payload.tarakEniCm);
 
   const overrides = readOverrides();
   const mergedPatterns = mergePatterns(baseProvider.list(), overrides);
@@ -303,6 +317,8 @@ const upsertWithBaseProvider = (
     inDyehouseMeters: nextBase.inDyehouseMeters ?? 0,
     variants: nextBase.variants ?? [],
     partiNos: nextBase.partiNos ?? [],
+    tarakEniCm:
+      payload.tarakEniCm === undefined ? nextBase.tarakEniCm : tarakEniCm,
     color: color ?? nextBase.color,
     imageDigital:
       imageDigital ?? normalizeImage(nextBase.imageDigital ?? nextBase.digitalImageUrl),

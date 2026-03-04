@@ -31,6 +31,8 @@ export type Pattern = {
   depoNo?: string;
   kg?: number;
   eniCm?: number;
+  tarakEniCm?: number | null;
+  reedWidthCm?: number;
   color?: string;
   currentStage: Stage;
   totalProducedMeters: number;
