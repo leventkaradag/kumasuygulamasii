@@ -1480,39 +1480,40 @@ export default function Dokuma() {
                           </div>
                         </label>
 
-                        <label className="col-span-2 space-y-1 text-sm text-neutral-700">
-                          <span>Tarak Eni (cm)</span>
-                          <input
-                            type="number"
-                            min="0"
-                            step="1"
-                            value={newPatternForm.tarakEniCm ?? ""}
-                            onChange={(event) =>
-                              setNewPatternForm((prev) => ({
-                                ...prev,
-                                tarakEniCm: event.target.value,
-                              }))
-                            }
-                            placeholder="orn: 120"
-                            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
-                          />
-                        </label>
+                        <div className="grid grid-cols-1 gap-3 md:col-span-2 md:grid-cols-2">
+                          <label className="space-y-1 text-sm text-neutral-700">
+                            <span>Toplam Tel</span>
+                            <input
+                              type="text"
+                              value={newPatternForm.totalEnds}
+                              onChange={(event) =>
+                                setNewPatternForm((prev) => ({
+                                  ...prev,
+                                  totalEnds: event.target.value,
+                                }))
+                              }
+                              className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                            />
+                          </label>
 
-                        <label className="space-y-1 text-sm text-neutral-700">
-                          <span>Toplam Tel</span>
-                          <input
-                            type="text"
-                            value={newPatternForm.totalEnds}
-                            onChange={(event) =>
-                              setNewPatternForm((prev) => ({
-                                ...prev,
-                                totalEnds: event.target.value,
-                              }))
-                            }
-                            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
-                          />
-                        </label>
-                        <div />
+                          <label className="space-y-1 text-sm text-neutral-700">
+                            <span>Tarak Eni (cm)</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={newPatternForm.tarakEniCm ?? ""}
+                              onChange={(event) =>
+                                setNewPatternForm((prev) => ({
+                                  ...prev,
+                                  tarakEniCm: event.target.value,
+                                }))
+                              }
+                              placeholder="örn: 120"
+                              className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                            />
+                          </label>
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
