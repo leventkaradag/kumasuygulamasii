@@ -9,6 +9,7 @@ import { cn } from "../lib/cn";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/ozetler", label: "Ozetler" },
   { href: "/desenler", label: "Desenler" },
   { href: "/depo", label: "Depo" },
   { href: "/sevk-rezerv", label: "Sevk/Rezerv Belgeleri" },
