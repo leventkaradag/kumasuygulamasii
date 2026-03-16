@@ -18,6 +18,7 @@ type AddRollPayload = {
   meters: number;
   rollNo?: string;
   inAt: string;
+  counterparty?: string;
   note?: string;
 };
 
@@ -231,6 +232,7 @@ export const depoLocalRepo = {
       rollNo: normalizeText(payload.rollNo),
       status: "IN_STOCK",
       inAt: toIsoDate(payload.inAt, "inAt"),
+      counterparty: normalizeText(payload.counterparty),
       note: normalizeText(payload.note),
     };
 

@@ -12,7 +12,13 @@ import { depoTransactionsLocalRepo } from "@/lib/repos/depoTransactionsLocalRepo
 import type { WeavingDispatchDocument } from "@/lib/domain/weaving";
 import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
 
-type TypeFilter = "ALL" | "SHIPMENT" | "RESERVATION" | "CORRECTION" | "WEAVING_DISPATCH";
+type TypeFilter =
+  | "ALL"
+  | "SHIPMENT"
+  | "RESERVATION"
+  | "RETURN"
+  | "CORRECTION"
+  | "WEAVING_DISPATCH";
 
 type TransactionRow = {
   transaction: DepoTransaction;
@@ -32,8 +38,10 @@ type ListRow =
   | { kind: "DISPATCH"; createdAt: string; data: DispatchDocumentRow };
 
 const transactionTypeLabelMap: Record<DepoTransactionType, string> = {
+  ENTRY: "Depo Giris",
   SHIPMENT: "Sevk",
   RESERVATION: "Rezerv",
+  RETURN: "Iade",
   REVERSAL: "Geri Alındı",
   ADJUSTMENT: "Düzeltme",
 };
@@ -134,7 +142,9 @@ export default function SevkRezervBelgeleriPage() {
 
   const allRows = useMemo<TransactionRow[]>(
     () =>
-      transactions.map((transaction) => {
+      transactions
+        .filter((transaction) => transaction.type !== "ENTRY")
+        .map((transaction) => {
         const txLines = linesByTransactionId.get(transaction.id) ?? [];
         const totals = transaction.totals ?? calculateTotalsFromLines(txLines);
         return {
@@ -184,6 +194,7 @@ export default function SevkRezervBelgeleriPage() {
         if (row.kind === "DEPO") {
           if (typeFilter === "SHIPMENT" && row.data.transaction.type !== "SHIPMENT") return false;
           if (typeFilter === "RESERVATION" && row.data.transaction.type !== "RESERVATION") return false;
+          if (typeFilter === "RETURN" && row.data.transaction.type !== "RETURN") return false;
           if (
             typeFilter === "CORRECTION" &&
             row.data.transaction.type !== "REVERSAL" &&
@@ -331,6 +342,7 @@ export default function SevkRezervBelgeleriPage() {
               <option value="ALL">Tip: Tumu</option>
               <option value="SHIPMENT">Tip: Sevk</option>
               <option value="RESERVATION">Tip: Rezerv</option>
+              <option value="RETURN">Tip: Iade</option>
               <option value="CORRECTION">Tip: İptal / Düzeltme</option>
               <option value="WEAVING_DISPATCH">Tip: Dokuma/Boyahane Sevk Belgeleri</option>
             </select>

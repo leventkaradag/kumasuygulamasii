@@ -6,6 +6,15 @@ import { useMemo } from "react";
 import type { DepoTransaction, DepoTransactionLine } from "@/lib/domain/depoTransaction";
 import { depoTransactionsLocalRepo } from "@/lib/repos/depoTransactionsLocalRepo";
 
+const transactionTitleMap = {
+  ENTRY: "Depo Giris Fisi",
+  SHIPMENT: "Sevk Fisi",
+  RESERVATION: "Rezerv Fisi",
+  RETURN: "Iade Fisi",
+  REVERSAL: "Depo Islem Fisi",
+  ADJUSTMENT: "Depo Islem Fisi",
+} as const;
+
 const fmt = (n: number) => n.toLocaleString("tr-TR", { maximumFractionDigits: 2 });
 
 const formatDateTime = (value: string) => {
@@ -127,7 +136,7 @@ export default function DepoTransactionPrintPage() {
           <div className="space-y-5">
             <header className="border-b border-black/10 pb-4">
               <h1 className="text-2xl font-bold text-neutral-900">
-                {transaction.type === "SHIPMENT" ? "Sevk Fisi" : transaction.type === "RESERVATION" ? "Rezerv Fisi" : "Depo Islem Fisi"}
+                {transactionTitleMap[transaction.type]}
               </h1>
               <div className="mt-3 space-y-1 text-sm text-neutral-700">
                 <div>

@@ -127,6 +127,7 @@ export const buildWarehouseSummary = ({
   );
 
   const returnTransactions = transactions.filter((transaction) => {
+    if (transaction.type === "RETURN") return transaction.status === "ACTIVE";
     if (transaction.type !== "REVERSAL" || !transaction.targetTransactionId) return false;
     return transactionsById.get(transaction.targetTransactionId)?.type === "SHIPMENT";
   });

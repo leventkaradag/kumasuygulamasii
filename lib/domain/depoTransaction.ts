@@ -1,6 +1,8 @@
 export type DepoTransactionType =
+  | "ENTRY"
   | "SHIPMENT"
   | "RESERVATION"
+  | "RETURN"
   | "REVERSAL"
   | "ADJUSTMENT";
 

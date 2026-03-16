@@ -10,8 +10,10 @@ const TRANSACTIONS_STORAGE_KEY = "depo:transactions";
 const TRANSACTION_LINES_STORAGE_KEY = "depo:transaction-lines";
 
 const TRANSACTION_TYPES: DepoTransactionType[] = [
+  "ENTRY",
   "SHIPMENT",
   "RESERVATION",
+  "RETURN",
   "REVERSAL",
   "ADJUSTMENT",
 ];
