@@ -272,7 +272,7 @@ const menuItems: AppMenuItem[] = [
   {
     key: 'dashboard',
     href: '/dashboard',
-    label: 'Dashboard',
+    label: 'Kontrol Paneli',
   },
   {
     key: 'ozetler',

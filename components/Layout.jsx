@@ -8,7 +8,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useAuthProfile } from "@/components/AuthProfileProvider";
 import { cn } from "../lib/cn";
 
-export default function Layout({ title, children }) {
+export default function Layout({ title, description = undefined, children }) {
   const supabase = createClient();
   const router = useRouter();
   const pathname = usePathname();
@@ -128,7 +128,7 @@ export default function Layout({ title, children }) {
             {title || "Panel"}
           </h1>
           <p className="text-sm text-neutral-600 md:text-base">
-            Operasyon akislari, desen takibi ve ekip koordinasyonu tek ekranda.
+            {description || "Operasyon akislari, desen takibi ve ekip koordinasyonu tek ekranda."}
           </p>
           {isReadOnly ? (
             <div className="inline-flex rounded-full border border-amber-500/30 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
