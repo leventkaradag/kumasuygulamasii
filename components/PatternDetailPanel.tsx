@@ -7,10 +7,12 @@ import { useAuthProfile } from "@/components/AuthProfileProvider";
 import { ImagePicker } from "@/components/ImagePicker";
 import { cn } from "@/lib/cn";
 import type { Pattern, Variant } from "@/lib/domain/pattern";
+import { getFallbackPatternMetricSummary, type PatternMetricSummary } from "@/lib/patternMetrics";
 import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
 
 type PatternDetailPanelProps = {
   pattern: Pattern | null;
+  metrics?: PatternMetricSummary;
   onPatternUpdated?: (pattern?: Pattern) => void;
   showArchived?: boolean;
 };
@@ -35,6 +37,21 @@ const stageLabel: Record<string, string> = {
   BOYAHANE: "Boyahane",
   DOKUMA: "Dokuma",
 };
+
+const meterFieldLabels: Record<keyof MeterFields, string> = {
+  totalProducedMeters: "Uretim",
+  stockMeters: "Stok",
+  inDyehouseMeters: "Boyahane",
+  defectMeters: "Hatali",
+};
+
+const warmPanelClass =
+  "rounded-xl border border-[#d8c5b3] bg-[#fcf8f2] shadow-[0_10px_24px_rgba(84,59,39,0.08),inset_0_1px_0_rgba(255,255,255,0.75)] transition";
+
+const warmPanelInteractiveClass = `${warmPanelClass} hover:border-[#b9987f] focus-within:border-[#b9987f] focus-within:ring-2 focus-within:ring-[#c9ab92]/35`;
+
+const controlledDangerButtonClass =
+  "rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-semibold text-red-600 shadow-[0_4px_10px_rgba(127,29,29,0.05)] transition hover:border-red-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-50";
 
 const toDraftNumber = (value?: number) =>
   typeof value === "number" && Number.isFinite(value) ? String(value) : "";
@@ -108,6 +125,7 @@ const fileToDataUrl = (file: File) =>
 
 export function PatternDetailPanel({
   pattern,
+  metrics,
   onPatternUpdated,
   showArchived = false,
 }: PatternDetailPanelProps) {
@@ -125,12 +143,6 @@ export function PatternDetailPanel({
   const [archiveStatus, setArchiveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [showMetersModal, setShowMetersModal] = useState(false);
   const [metersError, setMetersError] = useState("");
-  const [savedMeters, setSavedMeters] = useState<MeterFields>({
-    totalProducedMeters: 0,
-    stockMeters: 0,
-    inDyehouseMeters: 0,
-    defectMeters: 0,
-  });
   const [metersDraft, setMetersDraft] = useState<Record<keyof MeterFields, string>>({
     totalProducedMeters: "0",
     stockMeters: "0",
@@ -176,12 +188,6 @@ export function PatternDetailPanel({
     setIsEditingLogistics(false);
     setShowMetersModal(false);
     setMetersError("");
-    setSavedMeters({
-      totalProducedMeters: latestPattern?.totalProducedMeters ?? 0,
-      stockMeters: latestPattern?.stockMeters ?? 0,
-      inDyehouseMeters: latestPattern?.inDyehouseMeters ?? 0,
-      defectMeters: latestPattern?.defectMeters ?? 0,
-    });
     setMetersDraft({
       totalProducedMeters: String(latestPattern?.totalProducedMeters ?? 0),
       stockMeters: String(latestPattern?.stockMeters ?? 0),
@@ -252,6 +258,18 @@ export function PatternDetailPanel({
     );
   }
 
+  const resolvedMetrics = metrics ?? getFallbackPatternMetricSummary(pattern);
+  const meterSources = resolvedMetrics.sources;
+  const displayedMeters: MeterFields = {
+    totalProducedMeters: resolvedMetrics.totalProducedMeters,
+    stockMeters: resolvedMetrics.stockMeters,
+    inDyehouseMeters: resolvedMetrics.inDyehouseMeters,
+    defectMeters: resolvedMetrics.defectMeters,
+  };
+  const savedMeters = displayedMeters;
+  const hasEditableMeters = (Object.keys(meterFieldLabels) as Array<keyof MeterFields>).some(
+    (field) => meterSources[field] !== "operations"
+  );
   const variantCount = variantsDraft.length;
 
   const hasNoteChanges = note.trim() !== savedNote.trim();
@@ -405,14 +423,16 @@ export function PatternDetailPanel({
   };
   const logisticsInputClass =
     "w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary";
+  const isMeterManagedByOperations = (field: keyof MeterFields) => meterSources[field] === "operations";
 
   const openMetersModal = () => {
     if (!canEditPattern) return;
+    if (!hasEditableMeters) return;
     setMetersDraft({
-      totalProducedMeters: String(savedMeters.totalProducedMeters),
-      stockMeters: String(savedMeters.stockMeters),
-      inDyehouseMeters: String(savedMeters.inDyehouseMeters),
-      defectMeters: String(savedMeters.defectMeters),
+      totalProducedMeters: String(displayedMeters.totalProducedMeters),
+      stockMeters: String(displayedMeters.stockMeters),
+      inDyehouseMeters: String(displayedMeters.inDyehouseMeters),
+      defectMeters: String(displayedMeters.defectMeters),
     });
     setMetersError("");
     setShowMetersModal(true);
@@ -429,17 +449,23 @@ export function PatternDetailPanel({
     if (!canEditPattern) return;
     if (metersStatus === "saving") return;
 
-    const totalProducedMeters = parseMeterField("totalProducedMeters");
-    const stockMeters = parseMeterField("stockMeters");
-    const inDyehouseMeters = parseMeterField("inDyehouseMeters");
-    const defectMeters = parseMeterField("defectMeters");
+    const patch: Partial<MeterFields> = {};
 
-    if (
-      totalProducedMeters === null ||
-      stockMeters === null ||
-      inDyehouseMeters === null ||
-      defectMeters === null
-    ) {
+    for (const field of Object.keys(meterFieldLabels) as Array<keyof MeterFields>) {
+      if (isMeterManagedByOperations(field)) {
+        continue;
+      }
+
+      const parsedValue = parseMeterField(field);
+      if (parsedValue === null) {
+        setMetersError("Metre alanlari 0 veya daha buyuk bir sayi olmali.");
+        return;
+      }
+
+      patch[field] = parsedValue;
+    }
+
+    if (Object.keys(patch).length === 0) {
       setMetersError("Metre alanları 0 veya daha büyük bir sayı olmalı.");
       return;
     }
@@ -452,15 +478,7 @@ export function PatternDetailPanel({
     setMetersError("");
     setMetersStatus("saving");
 
-    const patch: MeterFields = {
-      totalProducedMeters,
-      stockMeters,
-      inDyehouseMeters,
-      defectMeters,
-    };
-
     patternsLocalRepo.update(pattern.id, patch);
-    setSavedMeters(patch);
     setMetersStatus("saved");
     setShowMetersModal(false);
 
@@ -793,7 +811,7 @@ export function PatternDetailPanel({
                 type="button"
                 onClick={handleDeletePattern}
                 disabled={archiveStatus === "saving"}
-                className="rounded-lg border border-red-500/40 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:opacity-50"
+                className={controlledDangerButtonClass}
               >
                 Kalıcı Sil
               </button>
@@ -803,7 +821,7 @@ export function PatternDetailPanel({
               type="button"
               onClick={handleArchive}
               disabled={archiveStatus === "saving"}
-              className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm font-semibold text-neutral-700 transition hover:border-coffee-primary/40 disabled:opacity-50"
+              className={controlledDangerButtonClass}
             >
               Sil
             </button>
@@ -835,7 +853,13 @@ export function PatternDetailPanel({
         <button
           type="button"
           onClick={openMetersModal}
-          className="rounded-lg bg-coffee-primary px-3 py-1.5 text-sm font-semibold text-white transition hover:brightness-95"
+          disabled={!hasEditableMeters}
+          className={cn(
+            "rounded-lg px-3 py-1.5 text-sm font-semibold transition",
+            hasEditableMeters
+              ? "bg-coffee-primary text-white hover:brightness-95"
+              : "cursor-not-allowed bg-[#ebe2d7] text-[#8e7a69]"
+          )}
         >
           Metreleri Düzenle
         </button>
@@ -870,12 +894,22 @@ export function PatternDetailPanel({
               <button
                 type="button"
                 onClick={() => setIsVariantsOpen((prev) => !prev)}
-                className="flex w-full items-center justify-between rounded-lg border border-black/10 bg-white px-3 py-2 text-left transition hover:border-coffee-primary/40"
+                className={cn(
+                  "flex w-full items-center justify-between rounded-xl px-4 py-3 text-left",
+                  warmPanelInteractiveClass
+                )}
                 aria-expanded={isVariantsOpen}
               >
-                <span className="text-sm text-neutral-700">Toplam {variantCount} varyant</span>
+                <span className="space-y-1">
+                  <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-[#7a6656]">
+                    Varyant Secici
+                  </span>
+                  <span className="block text-sm font-semibold text-[#3f3128]">
+                    Toplam {variantCount} varyant
+                  </span>
+                </span>
                 <ChevronDown
-                  className={cn("h-4 w-4 text-neutral-500 transition-transform", isVariantsOpen && "rotate-180")}
+                  className={cn("h-4 w-4 text-[#7a6656] transition-transform", isVariantsOpen && "rotate-180")}
                   aria-hidden
                 />
               </button>
@@ -903,7 +937,7 @@ export function PatternDetailPanel({
                       variantsDraft.map((variant) => (
                         <div
                           key={variant.id}
-                          className="grid grid-cols-[1fr,1fr,auto] items-center gap-2 rounded-lg border border-black/10 bg-white p-2"
+                          className="grid grid-cols-[1fr,1fr,auto] items-center gap-2 rounded-xl border border-[#dbc9b8] bg-[#fffdf9] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)]"
                         >
                           <input
                             type="text"
@@ -929,7 +963,7 @@ export function PatternDetailPanel({
                             type="button"
                             disabled={!canEditPattern}
                             onClick={() => handleRemoveVariant(variant.id)}
-                            className="rounded-lg border border-red-500/30 bg-red-50 px-2 py-1.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+                            className="rounded-lg border border-red-300 bg-white px-2.5 py-1.5 text-sm font-semibold text-red-600 transition hover:border-red-500 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
                             aria-label="Varyantı kaldır"
                           >
                             x
@@ -1229,25 +1263,25 @@ export function PatternDetailPanel({
               <MeterField
                 label="Üretim"
                 value={metersDraft.totalProducedMeters}
-                disabled={!canEditPattern}
+                disabled={!canEditPattern || isMeterManagedByOperations("totalProducedMeters")}
                 onChange={(value) => setMetersDraft((prev) => ({ ...prev, totalProducedMeters: value }))}
               />
               <MeterField
                 label="Stok"
                 value={metersDraft.stockMeters}
-                disabled={!canEditPattern}
+                disabled={!canEditPattern || isMeterManagedByOperations("stockMeters")}
                 onChange={(value) => setMetersDraft((prev) => ({ ...prev, stockMeters: value }))}
               />
               <MeterField
                 label="Boyahane"
                 value={metersDraft.inDyehouseMeters}
-                disabled={!canEditPattern}
+                disabled={!canEditPattern || isMeterManagedByOperations("inDyehouseMeters")}
                 onChange={(value) => setMetersDraft((prev) => ({ ...prev, inDyehouseMeters: value }))}
               />
               <MeterField
                 label="Hatalı"
                 value={metersDraft.defectMeters}
-                disabled={!canEditPattern}
+                disabled={!canEditPattern || isMeterManagedByOperations("defectMeters")}
                 onChange={(value) => setMetersDraft((prev) => ({ ...prev, defectMeters: value }))}
               />
             </div>
@@ -1290,25 +1324,29 @@ type ImageCardProps = {
 function ImageCard({ title, imageUrl, placeholderIcon, onPick, disabled = false }: ImageCardProps) {
   return (
     <div
-      className={cn(
-        "relative flex flex-col gap-3 overflow-hidden rounded-xl border border-black/5 bg-white shadow-[0_8px_20px_rgba(0,0,0,0.06)]"
-      )}
+      className={cn("relative flex flex-col gap-3 overflow-hidden", warmPanelInteractiveClass)}
     >
-      <div className="relative" style={{ aspectRatio: "4 / 3" }}>
+      <div className="relative overflow-hidden rounded-[18px] border border-[#d7c3b1] bg-[#f7efe5]" style={{ aspectRatio: "4 / 3" }}>
         {imageUrl ? (
           <img src={imageUrl} alt={title} className="h-full w-full object-cover" />
         ) : (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-coffee-surface text-neutral-500">
-            {placeholderIcon}
+          <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-[linear-gradient(180deg,rgba(255,252,247,0.95),rgba(245,235,223,0.92))] px-6 text-[#705d4f]">
+            <span className="flex h-16 w-16 items-center justify-center rounded-full border border-[#d8c4b0] bg-white/75 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)]">
+              {placeholderIcon}
+            </span>
             <span className="text-sm font-semibold">Fotoğraf yok</span>
           </div>
         )}
       </div>
-      <div className="flex items-center justify-between px-3 pb-3">
+      <div className="flex items-center justify-between gap-3 border-t border-[#e3d2c4] bg-[#fbf6ef] px-4 pb-4 pt-1">
         <div>
-          <div className="text-xs uppercase tracking-wide text-neutral-500">{title}</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#7a6656]">{title}</div>
         </div>
-        <ImagePicker onSelect={onPick} disabled={disabled} />
+        <ImagePicker
+          onSelect={onPick}
+          disabled={disabled}
+          buttonClassName="border-[#c9ae96] bg-[#fffaf3] text-[#49382d] shadow-[0_6px_16px_rgba(84,59,39,0.08)] hover:border-[#b79276] hover:bg-[#fffdf8]"
+        />
       </div>
     </div>
   );

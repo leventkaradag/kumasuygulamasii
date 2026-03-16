@@ -10,14 +10,16 @@ type ImagePickerProps = {
   accept?: string;
   onSelect?: (file?: File) => void;
   className?: string;
+  buttonClassName?: string;
   disabled?: boolean;
 };
 
 export function ImagePicker({
-  label = "Foto Seç",
+  label = "Foto Sec",
   accept = "image/*",
   onSelect,
   className,
+  buttonClassName,
   disabled = false,
 }: ImagePickerProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -30,7 +32,6 @@ export function ImagePicker({
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     onSelect?.(file);
-    // Allow re-selecting the same file
     event.target.value = "";
   };
 
@@ -48,7 +49,10 @@ export function ImagePicker({
         type="button"
         onClick={handleClick}
         disabled={disabled}
-        className="flex items-center gap-2 rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-semibold text-neutral-800 shadow-[0_4px_12px_rgba(0,0,0,0.06)] transition hover:-translate-y-0.5 hover:shadow-[0_8px_16px_rgba(0,0,0,0.08)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coffee-primary disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-[0_4px_12px_rgba(0,0,0,0.06)]"
+        className={cn(
+          "flex items-center gap-2 rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-semibold text-neutral-800 shadow-[0_4px_12px_rgba(0,0,0,0.06)] transition hover:-translate-y-0.5 hover:shadow-[0_8px_16px_rgba(0,0,0,0.08)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coffee-primary disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-[0_4px_12px_rgba(0,0,0,0.06)]",
+          buttonClassName
+        )}
       >
         <Upload className="h-4 w-4 text-coffee-primary" aria-hidden />
         <span>{label}</span>

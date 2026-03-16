@@ -4,9 +4,11 @@ import type { ReactNode } from "react";
 import { AlertTriangle, Image as ImageIcon, Package, Palette } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { Pattern } from "@/lib/domain/pattern";
+import type { PatternMetricSummary } from "@/lib/patternMetrics";
 
 type PatternListItemProps = {
   pattern: Pattern;
+  metrics?: PatternMetricSummary;
   selected?: boolean;
   onSelect?: (id: string) => void;
 };
@@ -22,8 +24,19 @@ const fmt = (n: number | null | undefined) => {
   return Number.isFinite(safe) ? safe.toLocaleString("tr-TR") : "0";
 };
 
-export function PatternListItem({ pattern, selected, onSelect }: PatternListItemProps) {
+export function PatternListItem({
+  pattern,
+  metrics,
+  selected,
+  onSelect,
+}: PatternListItemProps) {
   const thumb = pattern.finalImageUrl ?? pattern.digitalImageUrl ?? null;
+  const summary = metrics ?? {
+    totalProducedMeters: pattern.totalProducedMeters,
+    stockMeters: pattern.stockMeters,
+    inDyehouseMeters: pattern.inDyehouseMeters,
+    defectMeters: pattern.defectMeters,
+  };
 
   return (
     <button
@@ -67,18 +80,22 @@ export function PatternListItem({ pattern, selected, onSelect }: PatternListItem
         </div>
 
         <div className="mt-1 flex flex-wrap gap-2 text-[11px] font-semibold">
-          <Badge icon={<Package className="h-3.5 w-3.5" />} label="Stok" value={`${fmt(pattern.stockMeters)} m`} />
+          <Badge icon={<Package className="h-3.5 w-3.5" />} label="Stok" value={`${fmt(summary.stockMeters)} m`} />
           <Badge
             icon={<AlertTriangle className="h-3.5 w-3.5" />}
             label="Hatali"
-            value={`${fmt(pattern.defectMeters)} m`}
+            value={`${fmt(summary.defectMeters)} m`}
           />
           <Badge
             icon={<Palette className="h-3.5 w-3.5" />}
             label="Boyahane"
-            value={`${fmt(pattern.inDyehouseMeters)} m`}
+            value={`${fmt(summary.inDyehouseMeters)} m`}
           />
-          <Badge icon={<Package className="h-3.5 w-3.5" />} label="Uretim" value={`${fmt(pattern.totalProducedMeters)} m`} />
+          <Badge
+            icon={<Package className="h-3.5 w-3.5" />}
+            label="Uretim"
+            value={`${fmt(summary.totalProducedMeters)} m`}
+          />
         </div>
       </div>
     </button>
@@ -89,10 +106,14 @@ type BadgeProps = { icon: ReactNode; label: string; value: string };
 
 function Badge({ icon, label, value }: BadgeProps) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-coffee-surface px-2 py-1 text-neutral-700">
-      {icon}
-      <span className="text-[10px] uppercase tracking-wide">{label}</span>
-      <span className="font-bold text-neutral-900">{value}</span>
+    <span className="inline-flex max-w-full items-center gap-2 rounded-2xl border border-[#dccbbb] bg-[#f8f2ec] px-2.5 py-1.5 text-neutral-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/80 text-coffee-primary">
+        {icon}
+      </span>
+      <span className="min-w-0 leading-none">
+        <span className="block text-[9px] uppercase tracking-[0.18em] text-[#7a6656]">{label}</span>
+        <span className="block truncate pt-1 text-[11px] font-bold text-[#2f241d]">{value}</span>
+      </span>
     </span>
   );
 }

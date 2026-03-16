@@ -9,6 +9,7 @@ import { PatternListItem } from "@/components/PatternListItem";
 import { PatternModal } from "@/components/desen/PatternModal";
 import type { Pattern } from "@/lib/domain/pattern";
 import { Stage } from "@/lib/domain/movement";
+import { buildPatternMetricMap } from "@/lib/patternMetrics";
 import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
 import { patternsRepo } from "@/lib/repos/patternsRepo";
 import { cn } from "@/lib/cn";
@@ -202,6 +203,7 @@ export default function DesenlerPage() {
     () => getFilteredPatterns(patterns, showArchived, search, filters),
     [patterns, showArchived, search, filters]
   );
+  const patternMetricsMap = useMemo(() => buildPatternMetricMap(patterns), [patterns]);
   const canCreatePattern = permissions.patterns.create;
   const canEditPattern = permissions.patterns.edit;
 
@@ -381,6 +383,7 @@ export default function DesenlerPage() {
                 <PatternListItem
                   key={pattern.id}
                   pattern={pattern}
+                  metrics={patternMetricsMap.get(pattern.id)}
                   selected={pattern.id === selectedId}
                   onSelect={(id) => setSelectedId(id)}
                 />
@@ -396,6 +399,7 @@ export default function DesenlerPage() {
           <div className="min-h-0 h-full overflow-auto md:pr-1">
             <PatternDetailPanel
               pattern={selectedPattern}
+              metrics={selectedPattern ? patternMetricsMap.get(selectedPattern.id) : undefined}
               onPatternUpdated={handlePatternUpdated}
               showArchived={showArchived}
             />
