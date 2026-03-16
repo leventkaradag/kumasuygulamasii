@@ -3,15 +3,17 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, LogOut, Settings2, UserRound, UserRoundCog } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { USER_MOCK } from "../config/userMock";
+import { createClient } from "@/lib/supabase/client";
+import { useAuthProfile } from "@/components/AuthProfileProvider";
 import { cn } from "../lib/cn";
 import { useOutsideClick } from "../hooks/useOutsideClick";
-import { logout } from "../auth/auth";
 
 export function UserMenu() {
+  const supabase = createClient();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const { displayName, role } = useAuthProfile();
 
   useOutsideClick(wrapperRef, () => setOpen(false));
 
@@ -24,11 +26,14 @@ export function UserMenu() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [open]);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     setOpen(false);
     router.replace("/login");
+    router.refresh();
   };
+
+  const avatarLetter = (displayName.charAt(0) || "K").toUpperCase();
 
   return (
     <div ref={wrapperRef} className="relative">
@@ -40,14 +45,14 @@ export function UserMenu() {
         aria-label="Kullanıcı menüsü"
       >
         <div className="hidden sm:flex flex-col items-start leading-tight">
-          <span className="text-sm font-semibold text-neutral-900">{USER_MOCK.name}</span>
+          <span className="text-sm font-semibold text-neutral-900">{displayName}</span>
           <span className="inline-flex items-center gap-1 rounded-full bg-coffee-surface px-2 py-0.5 text-[11px] font-semibold text-neutral-700">
             <UserRoundCog className="h-3.5 w-3.5 text-coffee-primary" aria-hidden />
-            {USER_MOCK.role}
+            {role}
           </span>
         </div>
         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-coffee-accent text-white text-base font-semibold">
-          {USER_MOCK.name.charAt(0).toUpperCase()}
+          {avatarLetter}
         </div>
         <ChevronDown className="h-4 w-4 text-neutral-500" aria-hidden />
       </button>

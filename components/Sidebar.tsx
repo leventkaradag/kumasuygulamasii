@@ -3,8 +3,9 @@
 import clsx from "clsx";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuthProfile } from "./AuthProfileProvider";
 
-const links = [
+const baseLinks = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/ozetler", label: "Ozetler" },
   { href: "/desenler", label: "Desenler" },
@@ -18,6 +19,10 @@ const links = [
 
 export default function Sidebar() {
   const pathname = usePathname() ?? "";
+  const { displayName, profile, role, isSuperadmin } = useAuthProfile();
+  const links = isSuperadmin
+    ? [...baseLinks, { href: "/onay-paneli", label: "Onay Paneli" }]
+    : baseLinks;
 
   return (
     <aside className="flex min-h-screen w-56 flex-col border-r border-coffee-primary/20 bg-white/80 backdrop-blur">
@@ -44,6 +49,13 @@ export default function Sidebar() {
           );
         })}
       </nav>
+      <div className="border-t border-coffee-primary/10 px-4 py-4">
+        <div className="text-sm font-semibold text-slate-900">{displayName}</div>
+        <div className="mt-1 text-xs text-slate-500">{profile?.email ?? "-"}</div>
+        <div className="mt-2 text-xs uppercase tracking-[0.16em] text-slate-500">
+          Rol: {role}
+        </div>
+      </div>
     </aside>
   );
 }

@@ -1,15 +1,10 @@
 "use client";
 
 import Layout from "../components/Layout";
-import { getUser } from "../auth/auth";
-import { useEffect, useState } from "react";
+import { useAuthProfile } from "../components/AuthProfileProvider";
 
 export default function Dashboard() {
-  const [user, setUser] = useState(null);
-
-  useEffect(() => {
-    setUser(getUser());
-  }, []);
+  const { displayName, role } = useAuthProfile();
 
   return (
     <Layout title="Dashboard">
@@ -18,7 +13,7 @@ export default function Dashboard() {
           <div>
             <div className="text-xs uppercase tracking-[0.2em] text-neutral-500">Hos geldin</div>
             <div className="text-lg font-semibold text-neutral-900">
-              {user?.email || "Misafir"}
+              {displayName}
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -48,7 +43,7 @@ export default function Dashboard() {
               Rol altyapisi hazir
             </div>
             <p className="mt-3 text-sm text-neutral-600">
-              Aktif rol: <b>{user?.role || "viewer"}</b>. Sonraki adim staff/viewer
+              Aktif rol: <b>{role}</b>. Sonraki adim staff/viewer
               eklemek.
             </p>
           </div>

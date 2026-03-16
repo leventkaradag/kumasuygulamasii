@@ -3,7 +3,8 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
-import { createClient } from '../../../lib/supabase/client'
+import { createClient } from '@/lib/supabase/client'
+import { getAuthenticatedRedirectPath, normalizeProfileStatus } from '@/lib/supabase/profile-access'
 
 export default function LoginPage() {
   const supabase = createClient()
@@ -19,19 +20,33 @@ export default function LoginPage() {
     setLoading(true)
     setErrorText('')
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     })
 
-    setLoading(false)
-
     if (error) {
+      setLoading(false)
       setErrorText(error.message)
       return
     }
 
-    router.replace('/dashboard')
+    const profileResult = data.user
+      ? await supabase
+          .from('profiles')
+          .select('status')
+          .eq('id', data.user.id)
+          .maybeSingle()
+      : null
+
+    setLoading(false)
+
+    const nextPath =
+      profileResult?.data && !profileResult.error
+        ? getAuthenticatedRedirectPath(normalizeProfileStatus(profileResult.data.status))
+        : '/pending'
+
+    router.replace(nextPath)
     router.refresh()
   }
 

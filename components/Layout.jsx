@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { gsap } from "gsap";
-import { getUser, logout } from "../auth/auth";
+import { createClient } from "@/lib/supabase/client";
+import { useAuthProfile } from "@/components/AuthProfileProvider";
 import { cn } from "../lib/cn";
 
 const navItems = [
@@ -17,12 +18,11 @@ const navItems = [
 ];
 
 export default function Layout({ title, children }) {
+  const supabase = createClient();
   const router = useRouter();
   const pathname = usePathname();
   const rootRef = useRef(null);
-  const [user, setUser] = useState(() =>
-    typeof window !== "undefined" ? getUser() : null
-  );
+  const { displayName, profile, role, isSuperadmin } = useAuthProfile();
 
   useEffect(() => {
     const ctx = gsap.context(() => {
@@ -54,10 +54,10 @@ export default function Layout({ title, children }) {
     return () => ctx.revert();
   }, [pathname]);
 
-  const onLogout = () => {
-    logout();
-    setUser(null);
+  const onLogout = async () => {
+    await supabase.auth.signOut();
     router.replace("/login");
+    router.refresh();
   };
 
   return (
@@ -104,12 +104,12 @@ export default function Layout({ title, children }) {
                   </Link>
                 );
               })}
-              {user?.role === "superadmin" ? (
+              {isSuperadmin ? (
                 <Link
-                  href="/superadmin/users"
+                  href="/onay-paneli"
                   className={cn(
                     "rounded-full border px-3 py-1.5 text-sm font-semibold transition",
-                    pathname === "/superadmin/users"
+                    pathname === "/onay-paneli"
                       ? "border-coffee-primary/40 bg-coffee-primary/15 text-neutral-900 shadow-[0_6px_16px_rgba(0,0,0,0.08)]"
                       : "border-transparent text-neutral-700 hover:border-black/10 hover:bg-white"
                   )}
@@ -122,8 +122,10 @@ export default function Layout({ title, children }) {
 
           <div data-anim="nav" className="flex items-center gap-3">
             <div className="hidden text-right sm:block">
-              <div className="text-sm font-semibold text-neutral-900">{user?.email || "-"}</div>
-              <div className="text-xs text-neutral-500">rol: {user?.role || "-"}</div>
+              <div className="text-sm font-semibold text-neutral-900">{displayName}</div>
+              <div className="text-xs text-neutral-500">
+                {profile?.email || "-"} | rol: {role}
+              </div>
             </div>
             <button
               onClick={onLogout}

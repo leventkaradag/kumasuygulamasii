@@ -1,5 +1,5 @@
-import PageComponent from "../../../../spa-pages/SuperAdminUsers";
+import { redirect } from "next/navigation";
 
 export default function SuperAdminUsersRoute() {
-  return <PageComponent />;
+  redirect("/onay-paneli");
 }

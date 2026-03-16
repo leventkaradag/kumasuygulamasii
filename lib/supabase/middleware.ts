@@ -1,5 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
+import {
+  getAuthenticatedRedirectPath,
+  getProfileAccessStatus,
+  isApprovedProfile,
+} from './profile-access'
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
@@ -34,25 +39,64 @@ export async function middleware(request: NextRequest) {
   const isAuthPage =
     pathname.startsWith('/login') || pathname.startsWith('/register')
 
-  const isProtectedPage =
-    pathname.startsWith('/depo') ||
-    pathname.startsWith('/dashboard') ||
-    pathname.startsWith('/raporlar') ||
-    pathname.startsWith('/ayarlar') ||
-    pathname.startsWith('/sevk') ||
-    pathname.startsWith('/dokuma') ||
-    pathname.startsWith('/boyahane') ||
-    pathname.startsWith('/onay-paneli')
+  const isPendingPage = pathname.startsWith('/pending')
 
-  if (!user && isProtectedPage) {
+  const protectedPrefixes = [
+    '/dashboard',
+    '/ozetler',
+    '/desenler',
+    '/dokuma',
+    '/boyahane',
+    '/depo',
+    '/onay-paneli',
+    '/sevk-rezerv',
+    '/raporlar',
+    '/ayarlar',
+    '/siparis',
+    '/superadmin',
+    '/notlar',
+  ]
+
+  const isProtectedPage = protectedPrefixes.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+  )
+
+  if (!user && (isProtectedPage || isPendingPage)) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)
   }
 
-  if (user && isAuthPage) {
+  if (!user) {
+    return response
+  }
+
+  if (!isAuthPage && !isProtectedPage && !isPendingPage) {
+    return response
+  }
+
+  const profile = await getProfileAccessStatus(supabase, user.id)
+  const redirectPath = getAuthenticatedRedirectPath(profile.status)
+
+  if (isAuthPage) {
     const url = request.nextUrl.clone()
-    url.pathname = '/'
+    url.pathname = redirectPath
+    return NextResponse.redirect(url)
+  }
+
+  if (isPendingPage) {
+    if (isApprovedProfile(profile.status)) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/dashboard'
+      return NextResponse.redirect(url)
+    }
+
+    return response
+  }
+
+  if (!isApprovedProfile(profile.status)) {
+    const url = request.nextUrl.clone()
+    url.pathname = '/pending'
     return NextResponse.redirect(url)
   }
 
