@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, Image as ImageIcon, ImageOff, Layers, Package, Palette, Sparkles } from "lucide-react";
+import { ChevronDown, Image as ImageIcon, ImageOff, Layers, Package, Palette, Sparkles, X } from "lucide-react";
 import { Accordion } from "@/components/Accordion";
 import { useAuthProfile } from "@/components/AuthProfileProvider";
 import { ImagePicker } from "@/components/ImagePicker";
 import { cn } from "@/lib/cn";
 import type { Pattern, Variant } from "@/lib/domain/pattern";
+import { getPatternDigitalImageSrc, getPatternFinalImageSrc } from "@/lib/patternImage";
 import { getFallbackPatternMetricSummary, type PatternMetricSummary } from "@/lib/patternMetrics";
 import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
 
@@ -14,6 +15,13 @@ type PatternDetailPanelProps = {
   pattern: Pattern | null;
   metrics?: PatternMetricSummary;
   onPatternUpdated?: (pattern?: Pattern) => void;
+  onImagePreviewChange?: (
+    patternId: string,
+    preview: {
+      digitalPreviewUrl?: string | null;
+      finalPreviewUrl?: string | null;
+    }
+  ) => void;
   showArchived?: boolean;
 };
 
@@ -130,6 +138,7 @@ export function PatternDetailPanel({
   pattern,
   metrics,
   onPatternUpdated,
+  onImagePreviewChange,
   showArchived = false,
 }: PatternDetailPanelProps) {
   const { permissions } = useAuthProfile();
@@ -139,8 +148,8 @@ export function PatternDetailPanel({
 
   const [savedDigitalUrl, setSavedDigitalUrl] = useState<string | undefined>(undefined);
   const [savedFinalUrl, setSavedFinalUrl] = useState<string | undefined>(undefined);
-  const [pendingDigitalUrl, setPendingDigitalUrl] = useState<string | undefined>(undefined);
-  const [pendingFinalUrl, setPendingFinalUrl] = useState<string | undefined>(undefined);
+  const [pendingDigitalUrl, setPendingDigitalUrl] = useState<string | null | undefined>(undefined);
+  const [pendingFinalUrl, setPendingFinalUrl] = useState<string | null | undefined>(undefined);
   const [imageStatus, setImageStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [metersStatus, setMetersStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [archiveStatus, setArchiveStatus] = useState<"idle" | "saving" | "saved">("idle");
@@ -177,8 +186,8 @@ export function PatternDetailPanel({
     setSavedNote(initialNote);
     setNoteStatus("idle");
 
-    setSavedDigitalUrl(latestPattern?.digitalImageUrl);
-    setSavedFinalUrl(latestPattern?.finalImageUrl);
+    setSavedDigitalUrl(getPatternDigitalImageSrc(latestPattern) ?? undefined);
+    setSavedFinalUrl(getPatternFinalImageSrc(latestPattern) ?? undefined);
     setPendingDigitalUrl(undefined);
     setPendingFinalUrl(undefined);
     setImageStatus("idle");
@@ -289,7 +298,7 @@ export function PatternDetailPanel({
           ? "Değişiklik var"
           : "";
 
-  const hasPendingImageChanges = !!pendingDigitalUrl || !!pendingFinalUrl;
+  const hasPendingImageChanges = pendingDigitalUrl !== undefined || pendingFinalUrl !== undefined;
   const canSaveImages = canEditPattern && hasPendingImageChanges && imageStatus !== "saving";
   const imageStatusText =
     imageStatus === "saving"
@@ -406,6 +415,7 @@ export function PatternDetailPanel({
     if (!file) return;
     const dataUrl = await fileToDataUrl(file);
     setPendingDigitalUrl(dataUrl);
+    onImagePreviewChange?.(pattern.id, { digitalPreviewUrl: dataUrl });
     setImageStatus("idle");
   };
 
@@ -414,6 +424,7 @@ export function PatternDetailPanel({
     if (!file) return;
     const dataUrl = await fileToDataUrl(file);
     setPendingFinalUrl(dataUrl);
+    onImagePreviewChange?.(pattern.id, { finalPreviewUrl: dataUrl });
     setImageStatus("idle");
   };
 
@@ -429,24 +440,54 @@ export function PatternDetailPanel({
     setImageStatus("saving");
 
     const patch: Partial<Pattern> = {};
-    if (pendingDigitalUrl) {
-      patch.digitalImageUrl = pendingDigitalUrl;
+    if (pendingDigitalUrl !== undefined) {
+      patch.imageDigital = pendingDigitalUrl;
+      patch.digitalImageUrl = pendingDigitalUrl ?? undefined;
     }
-    if (pendingFinalUrl) {
-      patch.finalImageUrl = pendingFinalUrl;
+    if (pendingFinalUrl !== undefined) {
+      patch.imageFinal = pendingFinalUrl;
+      patch.finalImageUrl = pendingFinalUrl ?? undefined;
     }
 
     const updated = patternsLocalRepo.update(pattern.id, patch);
-    setSavedDigitalUrl(updated?.digitalImageUrl ?? savedDigitalUrl);
-    setSavedFinalUrl(updated?.finalImageUrl ?? savedFinalUrl);
+    if (updated) {
+      setSavedDigitalUrl(getPatternDigitalImageSrc(updated) ?? undefined);
+      setSavedFinalUrl(getPatternFinalImageSrc(updated) ?? undefined);
+    }
     setPendingDigitalUrl(undefined);
     setPendingFinalUrl(undefined);
+    onImagePreviewChange?.(pattern.id, {
+      digitalPreviewUrl: undefined,
+      finalPreviewUrl: undefined,
+    });
+    onPatternUpdated?.(updated);
     setImageStatus("saved");
 
     resetImageStatusTimerRef.current = setTimeout(() => {
       setImageStatus("idle");
       resetImageStatusTimerRef.current = null;
     }, 1200);
+  };
+
+  const displayedDigitalUrl =
+    pendingDigitalUrl === undefined ? savedDigitalUrl : pendingDigitalUrl ?? undefined;
+  const displayedFinalUrl =
+    pendingFinalUrl === undefined ? savedFinalUrl : pendingFinalUrl ?? undefined;
+
+  const handleRemoveDigital = () => {
+    if (!canEditPattern) return;
+    if (!displayedDigitalUrl) return;
+    setPendingDigitalUrl(null);
+    onImagePreviewChange?.(pattern.id, { digitalPreviewUrl: null });
+    setImageStatus("idle");
+  };
+
+  const handleRemoveFinal = () => {
+    if (!canEditPattern) return;
+    if (!displayedFinalUrl) return;
+    setPendingFinalUrl(null);
+    onImagePreviewChange?.(pattern.id, { finalPreviewUrl: null });
+    setImageStatus("idle");
   };
 
   const fmtMeters = (value: number) => (Number.isFinite(value) ? value.toLocaleString("tr-TR") : "0");
@@ -773,16 +814,18 @@ export function PatternDetailPanel({
         <div className="grid gap-4 sm:grid-cols-2">
           <ImageCard
             title="Dijital Görsel"
-            imageUrl={pendingDigitalUrl ?? savedDigitalUrl}
+            imageUrl={displayedDigitalUrl}
             placeholderIcon={<Sparkles className="h-10 w-10 text-coffee-primary" aria-hidden />}
             onPick={handlePickDigital}
+            onRemove={handleRemoveDigital}
             disabled={!canEditPattern}
           />
           <ImageCard
             title="Final Görsel"
-            imageUrl={pendingFinalUrl ?? savedFinalUrl}
+            imageUrl={displayedFinalUrl}
             placeholderIcon={<ImageIcon className="h-10 w-10 text-coffee-primary" aria-hidden />}
             onPick={handlePickFinal}
+            onRemove={handleRemoveFinal}
             disabled={!canEditPattern}
           />
         </div>
@@ -1407,15 +1450,34 @@ type ImageCardProps = {
   imageUrl?: string;
   placeholderIcon: ReactNode;
   onPick: (file?: File) => void;
+  onRemove?: () => void;
   disabled?: boolean;
 };
 
-function ImageCard({ title, imageUrl, placeholderIcon, onPick, disabled = false }: ImageCardProps) {
+function ImageCard({
+  title,
+  imageUrl,
+  placeholderIcon,
+  onPick,
+  onRemove,
+  disabled = false,
+}: ImageCardProps) {
   return (
     <div
       className={cn("relative flex flex-col gap-3 overflow-hidden", warmPanelInteractiveClass)}
     >
       <div className="relative overflow-hidden rounded-[18px] border border-[#d7c3b1] bg-[#f7efe5]" style={{ aspectRatio: "4 / 3" }}>
+        {imageUrl && onRemove ? (
+          <button
+            type="button"
+            onClick={onRemove}
+            disabled={disabled}
+            className="absolute right-3 top-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#ddcdbf] bg-[rgba(255,250,244,0.92)] text-[#6d584a] shadow-[0_8px_18px_rgba(63,48,38,0.10)] backdrop-blur-sm transition hover:border-[#c8ad94] hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c9ab92]/45 disabled:cursor-not-allowed disabled:opacity-60"
+            aria-label={`${title} gorselini kaldir`}
+          >
+            <X className="h-4 w-4" aria-hidden />
+          </button>
+        ) : null}
         {imageUrl ? (
           <img src={imageUrl} alt={title} className="h-full w-full object-cover" />
         ) : (

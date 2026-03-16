@@ -8,6 +8,7 @@ import { PatternDetailPanel } from "@/components/PatternDetailPanel";
 import { PatternListItem } from "@/components/PatternListItem";
 import { PatternModal } from "@/components/desen/PatternModal";
 import type { Pattern } from "@/lib/domain/pattern";
+import type { PatternImageFields } from "@/lib/patternImage";
 import { Stage } from "@/lib/domain/movement";
 import { buildPatternMetricMap } from "@/lib/patternMetrics";
 import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
@@ -186,6 +187,7 @@ const emptyPatternForCreate: Pattern = {
 export default function DesenlerPage() {
   const { permissions } = useAuthProfile();
   const [patterns, setPatterns] = useState<Pattern[]>(seedPatterns);
+  const [patternImagePreviews, setPatternImagePreviews] = useState<Record<string, PatternImageFields>>({});
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<PatternTab>("ACTIVE");
   const [filters, setFilters] = useState<PatternFilters>({});
@@ -199,9 +201,17 @@ export default function DesenlerPage() {
     setPatterns(sortPatternsByStage(patternsLocalRepo.list()));
   }, []);
 
+  const displayPatterns = useMemo(
+    () =>
+      patterns.map((pattern) =>
+        patternImagePreviews[pattern.id] ? { ...pattern, ...patternImagePreviews[pattern.id] } : pattern
+      ),
+    [patterns, patternImagePreviews]
+  );
+
   const filteredPatterns = useMemo(
-    () => getFilteredPatterns(patterns, showArchived, search, filters),
-    [patterns, showArchived, search, filters]
+    () => getFilteredPatterns(displayPatterns, showArchived, search, filters),
+    [displayPatterns, showArchived, search, filters]
   );
   const patternMetricsMap = useMemo(() => buildPatternMetricMap(patterns), [patterns]);
   const canCreatePattern = permissions.patterns.create;
@@ -253,16 +263,66 @@ export default function DesenlerPage() {
 
   const handlePatternUpdated = (updatedPattern?: Pattern) => {
     if (!updatedPattern) {
+      setPatternImagePreviews((current) => {
+        if (!selectedId || !current[selectedId]) return current;
+        const next = { ...current };
+        delete next[selectedId];
+        return next;
+      });
       setSelectedId(null);
       refreshPatterns(undefined, true);
       return;
     }
+
+    setPatternImagePreviews((current) => {
+      if (!current[updatedPattern.id]) return current;
+      const next = { ...current };
+      delete next[updatedPattern.id];
+      return next;
+    });
 
     const preferredId =
       updatedPattern && getFilteredPatterns([updatedPattern], showArchived, search, filters).length > 0
         ? updatedPattern.id
         : undefined;
     refreshPatterns(preferredId);
+  };
+
+  const handlePatternImagePreviewChange = (
+    patternId: string,
+    preview: {
+      digitalPreviewUrl?: string | null;
+      finalPreviewUrl?: string | null;
+    }
+  ) => {
+    setPatternImagePreviews((current) => {
+      const next = { ...current };
+      const existing = next[patternId] ?? {};
+      const merged: PatternImageFields = { ...existing };
+
+      if ("digitalPreviewUrl" in preview) {
+        if (preview.digitalPreviewUrl === undefined) {
+          delete merged.digitalPreviewUrl;
+        } else {
+          merged.digitalPreviewUrl = preview.digitalPreviewUrl;
+        }
+      }
+      if ("finalPreviewUrl" in preview) {
+        if (preview.finalPreviewUrl === undefined) {
+          delete merged.finalPreviewUrl;
+        } else {
+          merged.finalPreviewUrl = preview.finalPreviewUrl;
+        }
+      }
+
+      if (!("digitalPreviewUrl" in merged) && !("finalPreviewUrl" in merged)) {
+        delete next[patternId];
+        return next;
+      }
+
+      next[patternId] = merged;
+      return next;
+    });
   };
 
   const handleNumberFilterChange = (
@@ -401,6 +461,7 @@ export default function DesenlerPage() {
               pattern={selectedPattern}
               metrics={selectedPattern ? patternMetricsMap.get(selectedPattern.id) : undefined}
               onPatternUpdated={handlePatternUpdated}
+              onImagePreviewChange={handlePatternImagePreviewChange}
               showArchived={showArchived}
             />
           </div>

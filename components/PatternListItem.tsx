@@ -3,10 +3,13 @@
 import { Image as ImageIcon } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { Pattern } from "@/lib/domain/pattern";
+import { getPatternThumbnailSrc, type PatternImageFields } from "@/lib/patternImage";
 import type { PatternMetricSummary } from "@/lib/patternMetrics";
 
+type PatternListDisplayPattern = Pattern & PatternImageFields;
+
 type PatternListItemProps = {
-  pattern: Pattern;
+  pattern: PatternListDisplayPattern;
   metrics?: PatternMetricSummary;
   selected?: boolean;
   onSelect?: (id: string) => void;
@@ -29,7 +32,7 @@ export function PatternListItem({
   selected,
   onSelect,
 }: PatternListItemProps) {
-  const thumb = pattern.finalImageUrl ?? pattern.digitalImageUrl ?? null;
+  const thumb = getPatternThumbnailSrc(pattern);
   const summary = metrics ?? {
     totalProducedMeters: pattern.totalProducedMeters,
     stockMeters: pattern.stockMeters,
