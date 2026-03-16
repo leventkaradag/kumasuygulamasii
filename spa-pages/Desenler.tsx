@@ -377,8 +377,8 @@ export default function DesenlerPage() {
 
         <div className="min-h-0 h-[calc(100vh-220px)]">
           <div className="min-h-0 h-full grid gap-6 md:grid-cols-[320px,1fr]">
-          <div className="min-h-0 h-full overflow-auto rounded-2xl border border-black/5 bg-white/80 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <div className="space-y-2 pr-1">
+          <div className="min-h-0 h-full overflow-auto rounded-2xl border border-black/5 bg-white/80 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className="space-y-2.5 pr-1">
               {filteredPatterns.map((pattern) => (
                 <PatternListItem
                   key={pattern.id}

@@ -50,8 +50,11 @@ const warmPanelClass =
 
 const warmPanelInteractiveClass = `${warmPanelClass} hover:border-[#b9987f] focus-within:border-[#b9987f] focus-within:ring-2 focus-within:ring-[#c9ab92]/35`;
 
+const detailSectionClass =
+  "space-y-3 rounded-2xl border border-[#e2d5c8] bg-[#fffaf5] p-3.5 shadow-[0_10px_24px_rgba(63,48,38,0.05),inset_0_1px_0_rgba(255,255,255,0.78)]";
+
 const controlledDangerButtonClass =
-  "rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-semibold text-red-600 shadow-[0_4px_10px_rgba(127,29,29,0.05)] transition hover:border-red-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-50";
+  "rounded-xl border border-red-300 bg-white px-3 py-1.5 text-[13px] font-semibold text-red-600 shadow-[0_4px_10px_rgba(127,29,29,0.05)] transition hover:border-red-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-50";
 
 const toDraftNumber = (value?: number) =>
   typeof value === "number" && Number.isFinite(value) ? String(value) : "";
@@ -270,6 +273,9 @@ export function PatternDetailPanel({
   const hasEditableMeters = (Object.keys(meterFieldLabels) as Array<keyof MeterFields>).some(
     (field) => meterSources[field] !== "operations"
   );
+  const hasOperationalMeters = (Object.keys(meterFieldLabels) as Array<keyof MeterFields>).some(
+    (field) => meterSources[field] === "operations"
+  );
   const variantCount = variantsDraft.length;
 
   const hasNoteChanges = note.trim() !== savedNote.trim();
@@ -333,6 +339,44 @@ export function PatternDetailPanel({
       : variantsStatus === "saved"
         ? "Kaydedildi ✅"
         : "";
+
+  const actionFeedbackItems = [
+    imageStatus === "saved" || imageStatus === "saving" || hasPendingImageChanges
+      ? {
+          key: "images",
+          text: imageStatusText,
+          tone: imageStatus === "saved" ? "success" : "neutral",
+        }
+      : null,
+    metersStatus === "saved" || metersStatus === "saving"
+      ? {
+          key: "meters",
+          text: metersStatusText,
+          tone: metersStatus === "saved" ? "success" : "neutral",
+        }
+      : hasOperationalMeters
+        ? {
+            key: "metrics-live",
+            text: "Canli metrikler operasyon kayitlarindan hesaplanir.",
+            tone: "neutral",
+          }
+        : null,
+    archiveStatus === "saved" || archiveStatus === "saving"
+      ? {
+          key: "archive",
+          text: archiveStatusText,
+          tone: archiveStatus === "saved" ? "success" : "neutral",
+        }
+      : null,
+  ].filter(
+    (
+      item
+    ): item is {
+      key: string;
+      text: string;
+      tone: "neutral" | "success";
+    } => Boolean(item && item.text)
+  );
 
   const handleSaveNote = () => {
     if (!canEditPattern) return;
@@ -724,9 +768,9 @@ export function PatternDetailPanel({
   const showArchivedActions = showArchived;
 
   return (
-    <div className="space-y-4 rounded-2xl border border-black/5 bg-white/80 p-6 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-      <div className="space-y-2">
-        <div className="grid gap-3 sm:grid-cols-2">
+    <div className="space-y-5 rounded-[28px] border border-black/5 bg-white/85 p-4 shadow-[0_18px_44px_rgba(63,48,38,0.08)] sm:p-5">
+      <div className="space-y-4 rounded-[24px] border border-[#dfd0c2] bg-[linear-gradient(180deg,rgba(255,252,248,0.96),rgba(247,239,230,0.95))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.78)] sm:p-5">
+        <div className="grid gap-4 sm:grid-cols-2">
           <ImageCard
             title="Dijital Görsel"
             imageUrl={pendingDigitalUrl ?? savedDigitalUrl}
@@ -743,7 +787,7 @@ export function PatternDetailPanel({
           />
         </div>
 
-        <div className="flex items-center justify-end gap-3">
+        <div className="hidden">
           <p
             className={cn(
               "text-xs font-medium",
@@ -774,20 +818,25 @@ export function PatternDetailPanel({
         </div>
       </div>
 
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-xs uppercase tracking-wide text-neutral-500">Desen</div>
-          <div className="text-lg font-semibold text-neutral-900">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div className="space-y-1.5">
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#7a6656]">Desen</div>
+          <div className="text-[19px] font-semibold tracking-[-0.01em] text-neutral-900">
             {pattern.fabricCode} · {pattern.fabricName}
           </div>
-          <div className="mt-1 inline-flex rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-semibold text-neutral-700">
-            {stageLabel[pattern.currentStage] ?? pattern.currentStage}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <div className="inline-flex rounded-full border border-[#e2d5c7] bg-[#faf6f1] px-2.5 py-0.5 text-[10px] font-semibold text-[#6d5b4f]">
+              {stageLabel[pattern.currentStage] ?? pattern.currentStage}
+            </div>
+            <div className="text-[11px] font-medium text-[#8a7462]">
+              {pattern.weaveType} | Tel: {pattern.totalEnds}
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5 rounded-2xl border border-[#e2d5c7] bg-[#fbf6ef] p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.76)] xl:max-w-[390px] xl:justify-end">
           <p
             className={cn(
-              "text-xs font-medium",
+              "hidden text-xs font-medium",
               archiveStatus === "saved"
                 ? "text-emerald-600"
                 : archiveStatus === "saving"
@@ -797,13 +846,43 @@ export function PatternDetailPanel({
           >
             {archiveStatusText || " "}
           </p>
+          {canEditPattern ? (
+            <button
+              type="button"
+              onClick={handleSaveImages}
+              disabled={!canSaveImages}
+              className={cn(
+                "rounded-xl px-3 py-1.5 text-[13px] font-semibold transition",
+                canSaveImages
+                  ? "bg-coffee-primary text-white shadow-[0_10px_22px_rgba(63,48,38,0.18)] hover:brightness-95"
+                  : "cursor-not-allowed bg-[#ece4dc] text-[#9b8a7b]"
+              )}
+            >
+              Gorselleri Kaydet
+            </button>
+          ) : null}
+          {canEditPattern ? (
+            <button
+              type="button"
+              onClick={openMetersModal}
+              disabled={!hasEditableMeters}
+              className={cn(
+                "rounded-xl border px-3 py-1.5 text-[13px] font-semibold transition",
+                hasEditableMeters
+                  ? "border-[#ccb39c] bg-[#fffaf4] text-[#4a372c] hover:border-[#b48e73] hover:bg-[#fffdf9]"
+                  : "cursor-not-allowed border-[#e6dbd0] bg-[#f3ede6] text-[#9c8a7c]"
+              )}
+            >
+              Metreleri Duzenle
+            </button>
+          ) : null}
           {showArchivedActions && canDeletePattern ? (
             <>
               <button
                 type="button"
                 onClick={handleRestorePattern}
                 disabled={archiveStatus === "saving"}
-                className="rounded-lg border border-emerald-500/50 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50"
+                className="rounded-xl border border-emerald-500/50 bg-emerald-50 px-3 py-1.5 text-[13px] font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50"
               >
                 Geri Al
               </button>
@@ -829,14 +908,24 @@ export function PatternDetailPanel({
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-4">
+      {actionFeedbackItems.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {actionFeedbackItems.map((item) => (
+            <StatusChip key={item.key} tone={item.tone}>
+              {item.text}
+            </StatusChip>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard icon={<Package className="h-4 w-4" />} label="Üretim" value={`${fmtMeters(savedMeters.totalProducedMeters)} m`} />
         <StatCard icon={<Package className="h-4 w-4" />} label="Stok" value={`${fmtMeters(savedMeters.stockMeters)} m`} />
         <StatCard icon={<Palette className="h-4 w-4" />} label="Boyahane" value={`${fmtMeters(savedMeters.inDyehouseMeters)} m`} />
         <StatCard icon={<Layers className="h-4 w-4" />} label="Hatalı" value={`${fmtMeters(savedMeters.defectMeters)} m`} />
       </div>
 
-      <div className="flex items-center justify-end gap-3">
+      <div className="hidden">
         <p
           className={cn(
             "text-xs font-medium",
@@ -869,7 +958,7 @@ export function PatternDetailPanel({
       <Accordion title="Detaylar" defaultOpen={false}>
         <div className="space-y-4">
           <SectionBlock title="Ana bilgiler">
-            <dl className="grid grid-cols-2 gap-2 text-sm text-neutral-700">
+            <dl className="grid grid-cols-2 gap-3 text-sm text-neutral-700">
               <div>
                 <dt className="text-xs uppercase tracking-wide text-neutral-500">Dokuma tipi</dt>
                 <dd className="font-medium text-neutral-900">{pattern.weaveType}</dd>
@@ -890,12 +979,12 @@ export function PatternDetailPanel({
           </SectionBlock>
 
           <SectionBlock title="Varyantlar">
-            <div className="space-y-2">
+            <div className="space-y-3">
               <button
                 type="button"
                 onClick={() => setIsVariantsOpen((prev) => !prev)}
                 className={cn(
-                  "flex w-full items-center justify-between rounded-xl px-4 py-3 text-left",
+                  "flex w-full items-center justify-between rounded-2xl px-4 py-3.5 text-left",
                   warmPanelInteractiveClass
                 )}
                 aria-expanded={isVariantsOpen}
@@ -915,7 +1004,7 @@ export function PatternDetailPanel({
               </button>
 
               {isVariantsOpen ? (
-                <>
+                <div className="space-y-3 rounded-2xl border border-[#eadfd3] bg-[#fcf7f1] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.78)]">
                   {canEditPattern ? (
                   <div className="flex items-center justify-end">
                     <button
@@ -985,7 +1074,7 @@ export function PatternDetailPanel({
                   >
                     {variantsStatusText || " "}
                   </p>
-                </>
+                </div>
               ) : null}
             </div>
           </SectionBlock>
@@ -1335,11 +1424,12 @@ function ImageCard({ title, imageUrl, placeholderIcon, onPick, disabled = false 
               {placeholderIcon}
             </span>
             <span className="text-sm font-semibold">Fotoğraf yok</span>
+            <span className="text-xs font-medium text-[#8a7462]">Gorsel eklemek icin butonu kullanin.</span>
           </div>
         )}
       </div>
-      <div className="flex items-center justify-between gap-3 border-t border-[#e3d2c4] bg-[#fbf6ef] px-4 pb-4 pt-1">
-        <div>
+      <div className="flex items-center justify-between gap-2.5 border-t border-[#e3d2c4] bg-[#fbf6ef] px-3.5 pb-3.5 pt-2">
+        <div className="space-y-1.5">
           <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#7a6656]">{title}</div>
         </div>
         <ImagePicker
@@ -1352,6 +1442,26 @@ function ImageCard({ title, imageUrl, placeholderIcon, onPick, disabled = false 
   );
 }
 
+type StatusChipProps = {
+  children: ReactNode;
+  tone?: "neutral" | "success";
+};
+
+function StatusChip({ children, tone = "neutral" }: StatusChipProps) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium shadow-[inset_0_1px_0_rgba(255,255,255,0.68)]",
+        tone === "success"
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : "border-[#ddcfc1] bg-[#fbf6f0] text-[#7a6656]"
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
 type StatCardProps = {
   icon: ReactNode;
   label: string;
@@ -1360,13 +1470,13 @@ type StatCardProps = {
 
 function StatCard({ icon, label, value }: StatCardProps) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-black/5 bg-white px-3 py-3 text-sm shadow-[0_6px_14px_rgba(0,0,0,0.04)]">
+    <div className="flex items-center gap-2.5 rounded-2xl border border-[#dfd1c4] bg-[#fffaf5] px-3.5 py-3 text-sm shadow-[0_10px_22px_rgba(63,48,38,0.05)]">
       <span className="flex h-9 w-9 items-center justify-center rounded-full bg-coffee-primary/15 text-coffee-primary">
         {icon}
       </span>
       <div>
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">{label}</div>
-        <div className="text-base font-semibold text-neutral-900">{value}</div>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#7a6656]">{label}</div>
+        <div className="pt-0.5 text-[15px] font-semibold text-neutral-900">{value}</div>
       </div>
     </div>
   );
@@ -1403,8 +1513,8 @@ type SectionBlockProps = {
 
 function SectionBlock({ title, children }: SectionBlockProps) {
   return (
-    <div className="space-y-1">
-      <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{title}</div>
+    <div className={detailSectionClass}>
+      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#7a6656]">{title}</div>
       {children}
     </div>
   );
