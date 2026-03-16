@@ -38,7 +38,11 @@ export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname
 
   const isAuthPage =
-    pathname.startsWith('/login') || pathname.startsWith('/register')
+    pathname.startsWith('/login') ||
+    pathname.startsWith('/register') ||
+    pathname.startsWith('/forgot-password')
+
+  const isResetPasswordPage = pathname.startsWith('/reset-password')
 
   const isPendingPage = pathname.startsWith('/pending')
 
@@ -71,6 +75,10 @@ export async function middleware(request: NextRequest) {
   }
 
   if (!user) {
+    return response
+  }
+
+  if (isResetPasswordPage) {
     return response
   }
 
