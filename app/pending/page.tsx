@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import {
+  getAuthenticatedRedirectPath,
+  getProfileByUserId,
   getProfileAccessStatus,
   isApprovedProfile,
 } from '@/lib/supabase/profile-access'
@@ -24,13 +26,14 @@ export default async function PendingPage() {
     redirect('/login')
   }
 
-  const profile = await getProfileAccessStatus(supabase, user.id)
+  const profile = await getProfileByUserId(supabase, user.id)
 
-  if (isApprovedProfile(profile.status)) {
-    redirect('/dashboard')
+  if (profile && isApprovedProfile(profile.status)) {
+    redirect(getAuthenticatedRedirectPath(profile))
   }
 
-  const isRejected = profile.status === 'rejected'
+  const profileAccess = profile ?? (await getProfileAccessStatus(supabase, user.id))
+  const isRejected = profileAccess.status === 'rejected'
   const pageTitle = isRejected
     ? 'Hesabiniz Onaylanmadi'
     : 'Hesabiniz Onay Bekliyor'
@@ -57,7 +60,7 @@ export default async function PendingPage() {
             Hesap
           </div>
           <div className="mt-1 text-sm font-medium text-neutral-900">
-            {profile.email ?? user.email ?? '-'}
+            {profileAccess.email ?? user.email ?? '-'}
           </div>
         </div>
 

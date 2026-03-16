@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, Image as ImageIcon, ImageOff, Layers, Package, Palette, Sparkles } from "lucide-react";
 import { Accordion } from "@/components/Accordion";
+import { useAuthProfile } from "@/components/AuthProfileProvider";
 import { ImagePicker } from "@/components/ImagePicker";
 import { cn } from "@/lib/cn";
 import type { Pattern, Variant } from "@/lib/domain/pattern";
@@ -110,6 +111,7 @@ export function PatternDetailPanel({
   onPatternUpdated,
   showArchived = false,
 }: PatternDetailPanelProps) {
+  const { permissions } = useAuthProfile();
   const [note, setNote] = useState("");
   const [savedNote, setSavedNote] = useState("");
   const [noteStatus, setNoteStatus] = useState<"idle" | "saving" | "saved">("idle");
@@ -149,6 +151,8 @@ export function PatternDetailPanel({
   const resetArchiveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resetLogisticsStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resetVariantsStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const canEditPattern = permissions.patterns.edit;
+  const canDeletePattern = permissions.patterns.delete;
 
   useEffect(() => {
     const latestPattern = pattern ? patternsLocalRepo.get(pattern.id) ?? pattern : null;
@@ -251,7 +255,7 @@ export function PatternDetailPanel({
   const variantCount = variantsDraft.length;
 
   const hasNoteChanges = note.trim() !== savedNote.trim();
-  const canSaveNote = hasNoteChanges && noteStatus !== "saving";
+  const canSaveNote = canEditPattern && hasNoteChanges && noteStatus !== "saving";
   const noteStatusText =
     noteStatus === "saving"
       ? "Kaydediliyor..."
@@ -262,7 +266,7 @@ export function PatternDetailPanel({
           : "";
 
   const hasPendingImageChanges = !!pendingDigitalUrl || !!pendingFinalUrl;
-  const canSaveImages = hasPendingImageChanges && imageStatus !== "saving";
+  const canSaveImages = canEditPattern && hasPendingImageChanges && imageStatus !== "saving";
   const imageStatusText =
     imageStatus === "saving"
       ? "Kaydediliyor..."
@@ -303,7 +307,7 @@ export function PatternDetailPanel({
     normalizeNumberInputForCompare(logisticsDraft.fireOrani) !==
       normalizeNumberInputForCompare(toDraftNumber(pattern.fireOrani)) ||
     logisticsDraft.createdAt.trim() !== toDateInputValue(pattern.createdAt);
-  const canSaveLogistics = logisticsStatus !== "saving" && logisticsHasChanges;
+  const canSaveLogistics = canEditPattern && logisticsStatus !== "saving" && logisticsHasChanges;
 
   const variantsStatusText =
     variantsStatus === "saving"
@@ -313,6 +317,7 @@ export function PatternDetailPanel({
         : "";
 
   const handleSaveNote = () => {
+    if (!canEditPattern) return;
     if (!canSaveNote) return;
 
     if (resetNoteStatusTimerRef.current) {
@@ -335,6 +340,7 @@ export function PatternDetailPanel({
   };
 
   const handlePickDigital = async (file?: File) => {
+    if (!canEditPattern) return;
     if (!file) return;
     const dataUrl = await fileToDataUrl(file);
     setPendingDigitalUrl(dataUrl);
@@ -342,6 +348,7 @@ export function PatternDetailPanel({
   };
 
   const handlePickFinal = async (file?: File) => {
+    if (!canEditPattern) return;
     if (!file) return;
     const dataUrl = await fileToDataUrl(file);
     setPendingFinalUrl(dataUrl);
@@ -349,6 +356,7 @@ export function PatternDetailPanel({
   };
 
   const handleSaveImages = () => {
+    if (!canEditPattern) return;
     if (!canSaveImages) return;
 
     if (resetImageStatusTimerRef.current) {
@@ -399,6 +407,7 @@ export function PatternDetailPanel({
     "w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary";
 
   const openMetersModal = () => {
+    if (!canEditPattern) return;
     setMetersDraft({
       totalProducedMeters: String(savedMeters.totalProducedMeters),
       stockMeters: String(savedMeters.stockMeters),
@@ -417,6 +426,7 @@ export function PatternDetailPanel({
   };
 
   const handleSaveMeters = () => {
+    if (!canEditPattern) return;
     if (metersStatus === "saving") return;
 
     const totalProducedMeters = parseMeterField("totalProducedMeters");
@@ -461,6 +471,7 @@ export function PatternDetailPanel({
   };
 
   const persistVariants = (nextVariants: Variant[]) => {
+    if (!canEditPattern) return;
     if (resetVariantsStatusTimerRef.current) {
       clearTimeout(resetVariantsStatusTimerRef.current);
       resetVariantsStatusTimerRef.current = null;
@@ -495,6 +506,7 @@ export function PatternDetailPanel({
   };
 
   const handleAddVariant = () => {
+    if (!canEditPattern) return;
     if (!isVariantsOpen) {
       setIsVariantsOpen(true);
     }
@@ -516,6 +528,7 @@ export function PatternDetailPanel({
     key: "colorName" | "colorCode",
     rawValue: string
   ) => {
+    if (!canEditPattern) return;
     const nextVariants = variantsDraft.map((variant) => {
       if (variant.id !== variantId) return variant;
       if (key === "colorCode") {
@@ -534,11 +547,13 @@ export function PatternDetailPanel({
   };
 
   const handleRemoveVariant = (variantId: string) => {
+    if (!canEditPattern) return;
     const nextVariants = variantsDraft.filter((variant) => variant.id !== variantId);
     persistVariants(nextVariants);
   };
 
   const openLogisticsEditor = () => {
+    if (!canEditPattern) return;
     const latestPattern = patternsLocalRepo.get(pattern.id) ?? pattern;
     if (resetLogisticsStatusTimerRef.current) {
       clearTimeout(resetLogisticsStatusTimerRef.current);
@@ -563,6 +578,7 @@ export function PatternDetailPanel({
   };
 
   const handleSaveLogistics = () => {
+    if (!canEditPattern) return;
     if (logisticsStatus === "saving") return;
 
     const kg = parseOptionalNonNegativeNumber(logisticsDraft.kg);
@@ -624,6 +640,7 @@ export function PatternDetailPanel({
   };
 
   const handleArchive = () => {
+    if (!canDeletePattern) return;
     if (archiveStatus === "saving") return;
 
     if (resetArchiveStatusTimerRef.current) {
@@ -644,6 +661,7 @@ export function PatternDetailPanel({
   };
 
   const handleRestorePattern = () => {
+    if (!canDeletePattern) return;
     if (archiveStatus === "saving") return;
 
     if (resetArchiveStatusTimerRef.current) {
@@ -664,6 +682,7 @@ export function PatternDetailPanel({
   };
 
   const handleDeletePattern = () => {
+    if (!canDeletePattern) return;
     if (archiveStatus === "saving") return;
     const accepted = window.confirm("Bu desen kalıcı olarak silinecek. Emin misin?");
     if (!accepted) return;
@@ -695,12 +714,14 @@ export function PatternDetailPanel({
             imageUrl={pendingDigitalUrl ?? savedDigitalUrl}
             placeholderIcon={<Sparkles className="h-10 w-10 text-coffee-primary" aria-hidden />}
             onPick={handlePickDigital}
+            disabled={!canEditPattern}
           />
           <ImageCard
             title="Final Görsel"
             imageUrl={pendingFinalUrl ?? savedFinalUrl}
             placeholderIcon={<ImageIcon className="h-10 w-10 text-coffee-primary" aria-hidden />}
             onPick={handlePickFinal}
+            disabled={!canEditPattern}
           />
         </div>
 
@@ -717,6 +738,7 @@ export function PatternDetailPanel({
           >
             {imageStatusText || " "}
           </p>
+          {canEditPattern ? (
           <button
             type="button"
             onClick={handleSaveImages}
@@ -730,6 +752,7 @@ export function PatternDetailPanel({
           >
             Görselleri Kaydet
           </button>
+          ) : null}
         </div>
       </div>
 
@@ -756,7 +779,7 @@ export function PatternDetailPanel({
           >
             {archiveStatusText || " "}
           </p>
-          {showArchivedActions ? (
+          {showArchivedActions && canDeletePattern ? (
             <>
               <button
                 type="button"
@@ -775,7 +798,7 @@ export function PatternDetailPanel({
                 Kalıcı Sil
               </button>
             </>
-          ) : (
+          ) : canDeletePattern ? (
             <button
               type="button"
               onClick={handleArchive}
@@ -784,7 +807,7 @@ export function PatternDetailPanel({
             >
               Sil
             </button>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -808,6 +831,7 @@ export function PatternDetailPanel({
         >
           {metersStatusText || " "}
         </p>
+        {canEditPattern ? (
         <button
           type="button"
           onClick={openMetersModal}
@@ -815,6 +839,7 @@ export function PatternDetailPanel({
         >
           Metreleri Düzenle
         </button>
+        ) : null}
       </div>
 
       <Accordion title="Detaylar" defaultOpen={false}>
@@ -857,6 +882,7 @@ export function PatternDetailPanel({
 
               {isVariantsOpen ? (
                 <>
+                  {canEditPattern ? (
                   <div className="flex items-center justify-end">
                     <button
                       type="button"
@@ -866,6 +892,7 @@ export function PatternDetailPanel({
                       + Varyant Ekle
                     </button>
                   </div>
+                  ) : null}
 
                   <div className="max-h-[240px] space-y-2 overflow-auto pr-1">
                     {variantsDraft.length === 0 ? (
@@ -881,25 +908,28 @@ export function PatternDetailPanel({
                           <input
                             type="text"
                             value={variant.colorName}
+                            disabled={!canEditPattern}
                             onChange={(event) =>
                               handleVariantFieldChange(variant.id, "colorName", event.target.value)
                             }
                             placeholder="Renk adı"
-                            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
                           />
                           <input
                             type="text"
                             value={variant.colorCode ?? ""}
+                            disabled={!canEditPattern}
                             onChange={(event) =>
                               handleVariantFieldChange(variant.id, "colorCode", event.target.value)
                             }
                             placeholder="Renk kodu"
-                            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
                           />
                           <button
                             type="button"
+                            disabled={!canEditPattern}
                             onClick={() => handleRemoveVariant(variant.id)}
-                            className="rounded-lg border border-red-500/30 bg-red-50 px-2 py-1.5 text-sm font-semibold text-red-700 transition hover:bg-red-100"
+                            className="rounded-lg border border-red-500/30 bg-red-50 px-2 py-1.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
                             aria-label="Varyantı kaldır"
                           >
                             x
@@ -930,7 +960,7 @@ export function PatternDetailPanel({
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-sm font-medium text-neutral-700">Lojistik bilgileri</p>
-                {!isEditingLogistics ? (
+                {!isEditingLogistics && canEditPattern ? (
                   <button
                     type="button"
                     onClick={openLogisticsEditor}
@@ -1131,8 +1161,9 @@ export function PatternDetailPanel({
               <textarea
                 placeholder="Not ekle"
                 value={note}
+                disabled={!canEditPattern}
                 onChange={(event) => setNote(event.target.value)}
-                className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-800 shadow-[0_4px_10px_rgba(0,0,0,0.04)] focus:border-coffee-primary focus:outline-none focus:ring-1 focus:ring-coffee-primary"
+                className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-800 shadow-[0_4px_10px_rgba(0,0,0,0.04)] focus:border-coffee-primary focus:outline-none focus:ring-1 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
                 rows={3}
               />
               <div className="flex items-center justify-between gap-3">
@@ -1148,19 +1179,21 @@ export function PatternDetailPanel({
                 >
                   {noteStatusText || " "}
                 </p>
-                <button
-                  type="button"
-                  onClick={handleSaveNote}
-                  disabled={!canSaveNote}
-                  className={cn(
-                    "rounded-lg px-3 py-1.5 text-sm font-semibold transition",
-                    canSaveNote
-                      ? "bg-coffee-primary text-white hover:brightness-95"
-                      : "cursor-not-allowed bg-neutral-200 text-neutral-500"
-                  )}
-                >
-                  Kaydet
-                </button>
+                {canEditPattern ? (
+                  <button
+                    type="button"
+                    onClick={handleSaveNote}
+                    disabled={!canSaveNote}
+                    className={cn(
+                      "rounded-lg px-3 py-1.5 text-sm font-semibold transition",
+                      canSaveNote
+                        ? "bg-coffee-primary text-white hover:brightness-95"
+                        : "cursor-not-allowed bg-neutral-200 text-neutral-500"
+                    )}
+                  >
+                    Kaydet
+                  </button>
+                ) : null}
               </div>
             </div>
           </SectionBlock>
@@ -1196,21 +1229,25 @@ export function PatternDetailPanel({
               <MeterField
                 label="Üretim"
                 value={metersDraft.totalProducedMeters}
+                disabled={!canEditPattern}
                 onChange={(value) => setMetersDraft((prev) => ({ ...prev, totalProducedMeters: value }))}
               />
               <MeterField
                 label="Stok"
                 value={metersDraft.stockMeters}
+                disabled={!canEditPattern}
                 onChange={(value) => setMetersDraft((prev) => ({ ...prev, stockMeters: value }))}
               />
               <MeterField
                 label="Boyahane"
                 value={metersDraft.inDyehouseMeters}
+                disabled={!canEditPattern}
                 onChange={(value) => setMetersDraft((prev) => ({ ...prev, inDyehouseMeters: value }))}
               />
               <MeterField
                 label="Hatalı"
                 value={metersDraft.defectMeters}
+                disabled={!canEditPattern}
                 onChange={(value) => setMetersDraft((prev) => ({ ...prev, defectMeters: value }))}
               />
             </div>
@@ -1225,6 +1262,7 @@ export function PatternDetailPanel({
               >
                 İptal
               </button>
+              {canEditPattern ? (
               <button
                 type="button"
                 onClick={handleSaveMeters}
@@ -1232,6 +1270,7 @@ export function PatternDetailPanel({
               >
                 Kaydet
               </button>
+              ) : null}
             </div>
           </div>
         </div>
@@ -1245,9 +1284,10 @@ type ImageCardProps = {
   imageUrl?: string;
   placeholderIcon: ReactNode;
   onPick: (file?: File) => void;
+  disabled?: boolean;
 };
 
-function ImageCard({ title, imageUrl, placeholderIcon, onPick }: ImageCardProps) {
+function ImageCard({ title, imageUrl, placeholderIcon, onPick, disabled = false }: ImageCardProps) {
   return (
     <div
       className={cn(
@@ -1268,7 +1308,7 @@ function ImageCard({ title, imageUrl, placeholderIcon, onPick }: ImageCardProps)
         <div>
           <div className="text-xs uppercase tracking-wide text-neutral-500">{title}</div>
         </div>
-        <ImagePicker onSelect={onPick} />
+        <ImagePicker onSelect={onPick} disabled={disabled} />
       </div>
     </div>
   );
@@ -1298,9 +1338,10 @@ type MeterFieldProps = {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
 };
 
-function MeterField({ label, value, onChange }: MeterFieldProps) {
+function MeterField({ label, value, onChange, disabled = false }: MeterFieldProps) {
   return (
     <label className="space-y-1 text-sm text-neutral-700">
       <span>{label}</span>
@@ -1309,8 +1350,9 @@ function MeterField({ label, value, onChange }: MeterFieldProps) {
         min="0"
         step="0.01"
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+        className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
       />
     </label>
   );

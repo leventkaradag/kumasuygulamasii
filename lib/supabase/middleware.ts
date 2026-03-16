@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
+import { canAccessPath } from '@/lib/authz/access'
 import {
   getAuthenticatedRedirectPath,
-  getProfileAccessStatus,
+  getProfileByUserId,
   isApprovedProfile,
 } from './profile-access'
 
@@ -48,6 +49,7 @@ export async function middleware(request: NextRequest) {
     '/dokuma',
     '/boyahane',
     '/depo',
+    '/admin-paneli',
     '/onay-paneli',
     '/sevk-rezerv',
     '/raporlar',
@@ -55,6 +57,7 @@ export async function middleware(request: NextRequest) {
     '/siparis',
     '/superadmin',
     '/notlar',
+    '/sevk/',
   ]
 
   const isProtectedPage = protectedPrefixes.some(
@@ -75,8 +78,8 @@ export async function middleware(request: NextRequest) {
     return response
   }
 
-  const profile = await getProfileAccessStatus(supabase, user.id)
-  const redirectPath = getAuthenticatedRedirectPath(profile.status)
+  const profile = await getProfileByUserId(supabase, user.id)
+  const redirectPath = getAuthenticatedRedirectPath(profile)
 
   if (isAuthPage) {
     const url = request.nextUrl.clone()
@@ -85,18 +88,24 @@ export async function middleware(request: NextRequest) {
   }
 
   if (isPendingPage) {
-    if (isApprovedProfile(profile.status)) {
+    if (profile && isApprovedProfile(profile.status)) {
       const url = request.nextUrl.clone()
-      url.pathname = '/dashboard'
+      url.pathname = getAuthenticatedRedirectPath(profile)
       return NextResponse.redirect(url)
     }
 
     return response
   }
 
-  if (!isApprovedProfile(profile.status)) {
+  if (!profile || !isApprovedProfile(profile.status)) {
     const url = request.nextUrl.clone()
     url.pathname = '/pending'
+    return NextResponse.redirect(url)
+  }
+
+  if (!canAccessPath(profile.role, pathname)) {
+    const url = request.nextUrl.clone()
+    url.pathname = getAuthenticatedRedirectPath(profile)
     return NextResponse.redirect(url)
   }
 

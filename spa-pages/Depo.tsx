@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { ExternalLink, Plus, Search } from "lucide-react";
+import { useAuthProfile } from "@/components/AuthProfileProvider";
 import Layout from "@/components/Layout";
 import { cn } from "@/lib/cn";
 import type { FabricRoll, FabricRollStatus } from "@/lib/domain/depo";
@@ -405,6 +406,7 @@ const buildOperationSummary = (
 };
 
 export default function DepoPage() {
+  const { permissions } = useAuthProfile();
   const [activeTab, setActiveTab] = useState<DepoTab>("stock");
 
   const [patterns, setPatterns] = useState<Pattern[]>([]);
@@ -467,6 +469,15 @@ export default function DepoPage() {
   const [voidRollId, setVoidRollId] = useState<string | null>(null);
   const [voidReason, setVoidReason] = useState("");
   const [voidError, setVoidError] = useState("");
+  const canManageWarehouse = permissions.warehouse.operate;
+  const canCreateShipment = permissions.dispatch.create;
+  const canCreateReservation = permissions.reservation.create;
+  const canUseBasket = canCreateShipment || canCreateReservation;
+  const canReverseTransactions =
+    permissions.dispatch.edit ||
+    permissions.dispatch.delete ||
+    permissions.reservation.edit ||
+    permissions.reservation.delete;
 
   const refreshData = (preferredPatternId?: string | null) => {
     const nextPatterns = sortPatterns(patternsLocalRepo.list().filter(isPatternVisible));
@@ -800,6 +811,7 @@ export default function DepoPage() {
   };
 
   const openAddModal = () => {
+    if (!canManageWarehouse) return;
     if (!selectedPattern) return;
     setAddVariantId(selectedPattern.variants[0]?.id ?? "__other");
     setAddColorName("");
@@ -811,6 +823,7 @@ export default function DepoPage() {
   };
 
   const handleAddRoll = () => {
+    if (!canManageWarehouse) return;
     if (!selectedPattern) return;
     try {
       const inAt = toIsoDate(addDate, "Giris tarihi");
@@ -872,6 +885,7 @@ export default function DepoPage() {
   };
 
   const openReturnModal = () => {
+    if (!canManageWarehouse) return;
     const pattern = selectedPattern ?? patterns[0];
     if (!pattern) return;
     setReturnPatternId(pattern.id);
@@ -933,6 +947,7 @@ export default function DepoPage() {
   };
 
   const handleAddReturn = () => {
+    if (!canManageWarehouse) return;
     if (!returnSelectedPattern) return;
 
     try {
@@ -1022,6 +1037,7 @@ export default function DepoPage() {
   };
 
   const handleAddSelectionToBasket = () => {
+    if (!canUseBasket) return;
     if (selectedLineDrafts.length === 0) {
       setBulkWarning("Sepete eklenecek uygun top bulunamadi.");
       return;
@@ -1080,6 +1096,9 @@ export default function DepoPage() {
   };
 
   const openBulkModal = (type: BulkActionType) => {
+    if ((type === "SHIPMENT" && !canCreateShipment) || (type === "RESERVATION" && !canCreateReservation)) {
+      return;
+    }
     if (basketSummary.totalTops <= 0) return;
     setBulkActionType(type);
     setBulkCustomerInput("");
@@ -1108,6 +1127,9 @@ export default function DepoPage() {
 
   const handleBulkActionConfirm = () => {
     if (!bulkActionType) return;
+    if ((bulkActionType === "SHIPMENT" && !canCreateShipment) || (bulkActionType === "RESERVATION" && !canCreateReservation)) {
+      return;
+    }
     if (basketItems.length === 0) {
       setBulkError("Sevk sepeti bos.");
       return;
@@ -1262,6 +1284,7 @@ export default function DepoPage() {
   }, [detailRow]);
 
   const handleReverseTransaction = () => {
+    if (!canReverseTransactions) return;
     if (!detailRow) return;
     const target = detailRow.transaction;
     if (target.status === "REVERSED") return;
@@ -1322,6 +1345,7 @@ export default function DepoPage() {
   };
 
   const openEditRollModal = (roll: FabricRoll) => {
+    if (!canManageWarehouse) return;
     const pattern = patterns.find((item) => item.id === roll.patternId);
     const colorName = pattern ? rollColor(roll, pattern) : roll.colorName?.trim() || "";
     setEditRollId(roll.id);
@@ -1343,6 +1367,7 @@ export default function DepoPage() {
   );
 
   const handleSaveRollEdit = () => {
+    if (!canManageWarehouse) return;
     if (!editingRoll) return;
     try {
       const nextMeters = toPositiveNumber(editMeters, "Metre");
@@ -1384,6 +1409,7 @@ export default function DepoPage() {
   };
 
   const openVoidRollModal = (rollId: string) => {
+    if (!canManageWarehouse) return;
     setVoidRollId(rollId);
     setVoidReason("");
     setVoidError("");
@@ -1401,6 +1427,7 @@ export default function DepoPage() {
   );
 
   const handleVoidRoll = () => {
+    if (!canManageWarehouse) return;
     if (!voidingRoll) return;
 
     try {
@@ -1550,17 +1577,19 @@ export default function DepoPage() {
                         <div className="mt-1 text-2xl font-semibold text-neutral-900">{fmt(selectedPatternTotalMeters)} m</div>
                         <div className="text-xs text-neutral-600">{selectedPatternTotalRolls} aktif top</div>
                       </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={openReturnModal}
-                          className="inline-flex items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 transition hover:bg-violet-100"
-                        >
-                          <Plus className="h-4 w-4" />
-                          Iade Ekle
-                        </button>
-                        <button type="button" onClick={openAddModal} className="inline-flex items-center gap-2 rounded-lg bg-coffee-primary px-3 py-2 text-sm font-semibold text-white transition hover:brightness-95"><Plus className="h-4 w-4" />Top Girisi</button>
-                      </div>
+                      {canManageWarehouse ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={openReturnModal}
+                            className="inline-flex items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 transition hover:bg-violet-100"
+                          >
+                            <Plus className="h-4 w-4" />
+                            Iade Ekle
+                          </button>
+                          <button type="button" onClick={openAddModal} className="inline-flex items-center gap-2 rounded-lg bg-coffee-primary px-3 py-2 text-sm font-semibold text-white transition hover:brightness-95"><Plus className="h-4 w-4" />Top Girisi</button>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -1586,29 +1615,32 @@ export default function DepoPage() {
                       <select value={rollStatus} onChange={(e) => setRollStatus(e.target.value as FabricRollStatus | "")} className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"><option value="">Tum Durumlar</option><option value="IN_STOCK">Stokta</option><option value="RESERVED">Rezerve</option></select>
                     </div>
                   </div>
-                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-sm text-neutral-800">
-                    <span className="font-semibold">
-                      Anlik Secim: {selectedCount} top / {fmt(selectedMeters)} m
-                    </span>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleAddSelectionToBasket}
-                        disabled={selectedCount <= 0}
-                        className="rounded-lg border border-sky-500/40 bg-white px-2.5 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        Kalem Ekle (Desen Ekle)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedByRowKey({})}
-                        className="rounded-lg border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
-                      >
-                        Secimi Temizle
-                      </button>
+                  {canUseBasket ? (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-sm text-neutral-800">
+                      <span className="font-semibold">
+                        Anlik Secim: {selectedCount} top / {fmt(selectedMeters)} m
+                      </span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleAddSelectionToBasket}
+                          disabled={selectedCount <= 0}
+                          className="rounded-lg border border-sky-500/40 bg-white px-2.5 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Kalem Ekle (Desen Ekle)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedByRowKey({})}
+                          className="rounded-lg border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                        >
+                          Secimi Temizle
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  ) : null}
 
+                  {canUseBasket ? (
                   <div className="mt-3 rounded-lg border border-sky-500/30 bg-sky-50 px-3 py-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <span className="text-sm font-semibold text-sky-900">
@@ -1663,6 +1695,7 @@ export default function DepoPage() {
                       <p className="mt-2 text-xs text-sky-700">Sepet bos.</p>
                     )}
                   </div>
+                  ) : null}
                   {bulkWarning ? <p className="mt-2 text-xs font-medium text-rose-700">{bulkWarning}</p> : null}
                   <div className="mt-3 overflow-auto rounded-lg border border-black/10">
                     <table className="w-full text-left text-sm">
@@ -1688,7 +1721,7 @@ export default function DepoPage() {
                                     <button
                                       type="button"
                                       onClick={() => setRowSelectionCount(group.key, selectedForGroup - 1, selectableCount)}
-                                      disabled={selectedForGroup <= 0}
+                                      disabled={!canUseBasket || selectedForGroup <= 0}
                                       className="h-6 w-6 rounded border border-black/10 text-sm font-semibold text-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
                                     >
                                       -
@@ -1697,7 +1730,7 @@ export default function DepoPage() {
                                     <button
                                       type="button"
                                       onClick={() => setRowSelectionCount(group.key, selectedForGroup + 1, selectableCount)}
-                                      disabled={selectedForGroup >= selectableCount}
+                                      disabled={!canUseBasket || selectedForGroup >= selectableCount}
                                       className="h-6 w-6 rounded border border-black/10 text-sm font-semibold text-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
                                     >
                                       +
@@ -1752,7 +1785,7 @@ export default function DepoPage() {
                                                 <td className="px-2 py-1.5">{roll.reservedFor ?? roll.counterparty ?? "-"}</td>
                                                 <td className="px-2 py-1.5">{shortNote(roll.note)}</td>
                                                 <td className="px-2 py-1.5">
-                                                  {canAdjust ? (
+                                                  {canManageWarehouse && canAdjust ? (
                                                     <div className="flex flex-wrap items-center gap-2">
                                                       <button
                                                         type="button"
@@ -1948,7 +1981,7 @@ export default function DepoPage() {
           {addError ? <p className="mt-3 text-sm text-rose-600">{addError}</p> : null}
           <div className="mt-4 flex justify-end gap-2">
             <button type="button" onClick={() => setAddOpen(false)} className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100">Vazgec</button>
-            <button type="button" onClick={handleAddRoll} className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Kaydet</button>
+            {canManageWarehouse ? <button type="button" onClick={handleAddRoll} className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Kaydet</button> : null}
           </div>
         </Modal>
       ) : null}
@@ -2078,7 +2111,7 @@ export default function DepoPage() {
           {returnError ? <p className="mt-3 text-sm text-rose-600">{returnError}</p> : null}
           <div className="mt-4 flex justify-end gap-2">
             <button type="button" onClick={closeReturnModal} className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100">Vazgec</button>
-            <button type="button" onClick={handleAddReturn} className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Iadeyi Kaydet</button>
+            {canManageWarehouse ? <button type="button" onClick={handleAddReturn} className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Iadeyi Kaydet</button> : null}
           </div>
         </Modal>
       ) : null}
@@ -2204,7 +2237,7 @@ export default function DepoPage() {
           {bulkError ? <p className="mt-3 text-sm text-rose-600">{bulkError}</p> : null}
           <div className="mt-4 flex justify-end gap-2">
             <button type="button" onClick={closeBulkModal} className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100">Iptal</button>
-            <button type="button" onClick={handleBulkActionConfirm} className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Onayla</button>
+            {canUseBasket ? <button type="button" onClick={handleBulkActionConfirm} className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Onayla</button> : null}
           </div>
         </Modal>
       ) : null}
@@ -2244,7 +2277,8 @@ export default function DepoPage() {
               Yazdir
               <ExternalLink className="h-4 w-4" />
             </Link>
-            {detailRow.transaction.status !== "REVERSED" &&
+            {canReverseTransactions &&
+            detailRow.transaction.status !== "REVERSED" &&
             (detailRow.transaction.type === "SHIPMENT" || detailRow.transaction.type === "RESERVATION") ? (
               <button type="button" onClick={handleReverseTransaction} className="rounded-lg border border-rose-500/40 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100">Iptal Et / Geri Al</button>
             ) : null}
@@ -2270,7 +2304,7 @@ export default function DepoPage() {
           {voidError ? <p className="mt-3 text-sm text-rose-600">{voidError}</p> : null}
           <div className="mt-4 flex justify-end gap-2">
             <button type="button" onClick={closeVoidRollModal} className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100">Vazgec</button>
-            <button type="button" onClick={handleVoidRoll} className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Onayla</button>
+            {canManageWarehouse ? <button type="button" onClick={handleVoidRoll} className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Onayla</button> : null}
           </div>
         </Modal>
       ) : null}
@@ -2286,7 +2320,7 @@ export default function DepoPage() {
           {editError ? <p className="mt-3 text-sm text-rose-600">{editError}</p> : null}
           <div className="mt-4 flex justify-end gap-2">
             <button type="button" onClick={closeEditRollModal} className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100">Vazgec</button>
-            <button type="button" onClick={handleSaveRollEdit} className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Kaydet</button>
+            {canManageWarehouse ? <button type="button" onClick={handleSaveRollEdit} className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Kaydet</button> : null}
           </div>
         </Modal>
       ) : null}

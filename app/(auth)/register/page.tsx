@@ -34,7 +34,7 @@ export default function RegisterPage() {
       const { error: profileError } = await supabase.from('profiles').upsert({
         id: data.user.id,
         email: data.user.email,
-        role: 'user',
+        role: 'viewer',
         status: 'pending',
       })
 

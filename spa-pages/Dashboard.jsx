@@ -4,7 +4,7 @@ import Layout from "../components/Layout";
 import { useAuthProfile } from "../components/AuthProfileProvider";
 
 export default function Dashboard() {
-  const { displayName, role } = useAuthProfile();
+  const { canEdit, displayName, role } = useAuthProfile();
 
   return (
     <Layout title="Dashboard">
@@ -16,14 +16,16 @@ export default function Dashboard() {
               {displayName}
             </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button className="rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold text-neutral-800 shadow-[0_6px_16px_rgba(0,0,0,0.08)] transition hover:-translate-y-0.5">
-              Yeni Desen
-            </button>
-            <button className="rounded-full bg-coffee-primary px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_20px_rgba(0,0,0,0.14)] transition hover:-translate-y-0.5">
-              Rapor Olustur
-            </button>
-          </div>
+          {canEdit ? (
+            <div className="flex flex-wrap gap-2">
+              <button className="rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold text-neutral-800 shadow-[0_6px_16px_rgba(0,0,0,0.08)] transition hover:-translate-y-0.5">
+                Yeni Desen
+              </button>
+              <button className="rounded-full bg-coffee-primary px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_20px_rgba(0,0,0,0.14)] transition hover:-translate-y-0.5">
+                Rapor Olustur
+              </button>
+            </div>
+          ) : null}
         </div>
 
         <div className="grid gap-4 md:grid-cols-3">

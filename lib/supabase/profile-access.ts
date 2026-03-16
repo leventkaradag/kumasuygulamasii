@@ -1,5 +1,7 @@
+import { getDefaultRouteForRole, normalizeAppRole, type AppRole } from '@/lib/authz/access'
+
 export type ProfileAccessStatus = 'approved' | 'pending' | 'rejected' | 'missing'
-export type ProfileRole = 'user' | 'admin' | 'superadmin' | string
+export type ProfileRole = AppRole
 
 export type AppProfile = {
   id: string
@@ -19,8 +21,7 @@ export function normalizeProfileStatus(status: string | null | undefined) {
 }
 
 export function normalizeProfileRole(role: string | null | undefined): ProfileRole {
-  const nextRole = role?.trim()
-  return nextRole ? nextRole : 'user'
+  return normalizeAppRole(role)
 }
 
 export async function getProfileAccessStatus(
@@ -66,8 +67,17 @@ export async function getProfileByUserId(
   }
 }
 
-export function getAuthenticatedRedirectPath(status: ProfileAccessStatus) {
-  return status === 'approved' ? '/dashboard' : '/pending'
+export function getAuthenticatedRedirectPath(
+  profile:
+    | Pick<AppProfile, 'role' | 'status'>
+    | { role?: string | null; status: ProfileAccessStatus }
+    | null
+) {
+  if (!profile || profile.status !== 'approved') {
+    return '/pending'
+  }
+
+  return getDefaultRouteForRole(normalizeProfileRole(profile.role))
 }
 
 export function isApprovedProfile(status: ProfileAccessStatus) {

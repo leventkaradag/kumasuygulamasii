@@ -105,7 +105,7 @@ export default function SuperAdminUsers() {
   );
 
   return (
-    <Layout title="SuperAdmin - Kullanici Onay Paneli">
+    <Layout title="SuperAdmin - Kullanici Admin Paneli">
       <div style={{ maxWidth: 980 }}>
         <div style={{ marginBottom: 12, color: "#555" }}>
           Register olanlar <b>pending</b> gelir. Onaylayinca <b>active</b> olur ve login yapabilir.

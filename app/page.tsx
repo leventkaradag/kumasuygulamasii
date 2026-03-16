@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import {
   getAuthenticatedRedirectPath,
-  getProfileAccessStatus,
+  getProfileByUserId,
 } from "@/lib/supabase/profile-access";
 
 export default async function HomePage() {
@@ -15,6 +15,6 @@ export default async function HomePage() {
     redirect("/login");
   }
 
-  const profile = await getProfileAccessStatus(supabase, user.id);
-  redirect(getAuthenticatedRedirectPath(profile.status));
+  const profile = await getProfileByUserId(supabase, user.id);
+  redirect(getAuthenticatedRedirectPath(profile));
 }

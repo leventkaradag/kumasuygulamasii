@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { useAuthProfile } from "@/components/AuthProfileProvider";
 import type { Stage } from "@/lib/domain/movement";
 import type { Pattern } from "@/lib/domain/pattern";
 import {
@@ -79,6 +80,7 @@ const composeCountAndYarn = (count: string, yarn: string) => {
 };
 
 export function PatternModal({ pattern, onClose, onSave }: Props) {
+  const { permissions } = useAuthProfile();
   const initialWarp = parseCountAndYarn(pattern.warpCount);
   const initialWeft = parseCountAndYarn(pattern.weftCount);
   const [mounted, setMounted] = useState(false);
@@ -94,6 +96,7 @@ export function PatternModal({ pattern, onClose, onSave }: Props) {
   const [metersToAdd, setMetersToAdd] = useState<string>("");
   const [metersTarget, setMetersTarget] = useState<PatternMetersTarget>("AUTO");
   const [error, setError] = useState("");
+  const canSavePattern = pattern.id ? permissions.patterns.edit : permissions.patterns.create;
 
   useEffect(() => {
     setMounted(true);
@@ -128,6 +131,11 @@ export function PatternModal({ pattern, onClose, onSave }: Props) {
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
+
+    if (!canSavePattern) {
+      setError("Bu hesap desen kaydi guncelleyemez.");
+      return;
+    }
 
     const warpCount = composeCountAndYarn(warpCountValue, warpYarnValue);
     const weftCount = composeCountAndYarn(weftCountValue, weftYarnValue);
@@ -271,6 +279,7 @@ export function PatternModal({ pattern, onClose, onSave }: Props) {
             </button>
             <button
               type="submit"
+              disabled={!canSavePattern}
               className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white hover:bg-coffee-primary/90"
             >
               Kaydet

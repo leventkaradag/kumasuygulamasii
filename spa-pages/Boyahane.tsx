@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
+import { useAuthProfile } from "@/components/AuthProfileProvider";
 import Layout from "../components/Layout";
 import { cn } from "@/lib/cn";
 import type { Dyehouse, DyehouseJob, DyehouseJobStatus, DyehouseLine } from "@/lib/domain/dyehouse";
@@ -102,6 +103,7 @@ function StatusBadge({ status }: { status: DyehouseJobStatus }) {
 }
 
 export default function Boyahane() {
+  const { permissions } = useAuthProfile();
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
   const [jobs, setJobs] = useState<DyehouseJob[]>([]);
   const [dispatchDocuments, setDispatchDocuments] = useState<WeavingDispatchDocument[]>([]);
@@ -111,6 +113,7 @@ export default function Boyahane() {
   const [jobTab, setJobTab] = useState<JobTab>("RECEIVED");
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
+  const canCreateJobs = permissions.dyehouse.create;
 
   const refreshData = () => {
     setDyehouses(dyehouseLocalRepo.list());
@@ -225,6 +228,11 @@ export default function Boyahane() {
       const existing = jobsByDispatchDocId.get(document.id);
       if (existing) {
         setSelectedJobId(existing.id);
+        return;
+      }
+
+      if (!canCreateJobs) {
+        setFeedback("Bu hesap yeni boyahane is emri olusturamaz.");
         return;
       }
 
@@ -347,7 +355,8 @@ export default function Boyahane() {
                         <button
                           type="button"
                           onClick={() => handleCreateOrOpenJob(document)}
-                          className="rounded border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                          disabled={!linkedJob && !canCreateJobs}
+                          className="rounded border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           {linkedJob ? "Isi Ac" : "Is Emri Ac"}
                         </button>
@@ -461,12 +470,17 @@ type JobModalProps = {
   onSaved: (jobId?: string) => void;
 };
 function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
+  const { permissions } = useAuthProfile();
   const [lineDrafts, setLineDrafts] = useState<LineDraft[]>([]);
   const [jobNotes, setJobNotes] = useState("");
   const [isFinishing, setIsFinishing] = useState(false);
   const [allowFinishedEdit, setAllowFinishedEdit] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const canEditBreakdown = permissions.dyehouse.edit;
+  const canAdvanceDyehouse = permissions.dyehouse.advance;
+  const canDeleteJob = permissions.dyehouse.delete;
+  const canCreateDepotDispatch = permissions.dispatch.create;
 
   useEffect(() => {
     setLineDrafts(job.lines.map((line) => createLineDraft(line)));
@@ -485,8 +499,9 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
     [job.outputDispatchDocId]
   );
 
-  const rowsEditable = job.status !== "FINISHED" || allowFinishedEdit;
-  const finishEditable = (job.status === "IN_PROCESS" && isFinishing) || allowFinishedEdit;
+  const rowsEditable = canEditBreakdown && (job.status !== "FINISHED" || allowFinishedEdit);
+  const finishEditable =
+    canAdvanceDyehouse && ((job.status === "IN_PROCESS" && isFinishing) || allowFinishedEdit);
 
   const parsePositive = (value: string, label: string) => {
     const parsed = Number(value.trim().replace(",", "."));
@@ -578,6 +593,7 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
   };
 
   const saveBreakdown = () => {
+    if (!canEditBreakdown) return;
     try {
       const lines = buildBreakdownLines();
       dyehouseLocalRepo.updateJob(job.id, {
@@ -594,6 +610,7 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
   };
 
   const startProcess = () => {
+    if (!canAdvanceDyehouse) return;
     try {
       const lines = buildBreakdownLines();
       dyehouseLocalRepo.updateJob(job.id, {
@@ -611,6 +628,7 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
   };
 
   const finishJob = () => {
+    if (!canAdvanceDyehouse) return;
     try {
       const lines = buildFinishedLines();
       dyehouseLocalRepo.updateJob(job.id, {
@@ -631,6 +649,7 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
   };
 
   const createDepotDispatch = () => {
+    if (!canCreateDepotDispatch) return;
     try {
       if (job.status !== "FINISHED") {
         throw new Error("Depo cikis belgesi sadece biten is emrinden olusturulabilir.");
@@ -676,6 +695,7 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
   };
 
   const deleteJob = () => {
+    if (!canDeleteJob) return;
     if (!window.confirm("Bu is emri silinsin mi?")) return;
     dyehouseLocalRepo.deleteJob(job.id);
     onSaved();
@@ -710,7 +730,7 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
               Renk Dagitimi
             </div>
             <div className="flex flex-wrap gap-2">
-              {job.status === "FINISHED" && !allowFinishedEdit ? (
+              {canEditBreakdown && job.status === "FINISHED" && !allowFinishedEdit ? (
                 <button
                   type="button"
                   onClick={() => setAllowFinishedEdit(true)}
@@ -837,7 +857,7 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
               <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
                 Kapanis Kg / Fire
               </div>
-              {job.status === "IN_PROCESS" && !isFinishing ? (
+              {canAdvanceDyehouse && job.status === "IN_PROCESS" && !isFinishing ? (
                 <button
                   type="button"
                   onClick={() => setIsFinishing(true)}
@@ -971,7 +991,7 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
                 >
                   Belgeyi Yazdir
                 </Link>
-              ) : (
+              ) : canCreateDepotDispatch ? (
                 <button
                   type="button"
                   onClick={createDepotDispatch}
@@ -979,7 +999,7 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
                 >
                   Depo'ya Cikis Belgesi Olustur
                 </button>
-              )}
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -988,13 +1008,15 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
         {error ? <p className="text-xs font-medium text-rose-600">{error}</p> : null}
 
         <div className="flex flex-wrap justify-end gap-2 pt-1">
-          <button
-            type="button"
-            onClick={deleteJob}
-            className="rounded-lg border border-rose-500/30 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
-          >
-            Is Emrini Sil
-          </button>
+          {canDeleteJob ? (
+            <button
+              type="button"
+              onClick={deleteJob}
+              className="rounded-lg border border-rose-500/30 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
+            >
+              Is Emrini Sil
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onClose}

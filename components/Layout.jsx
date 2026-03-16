@@ -8,21 +8,12 @@ import { createClient } from "@/lib/supabase/client";
 import { useAuthProfile } from "@/components/AuthProfileProvider";
 import { cn } from "../lib/cn";
 
-const navItems = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/ozetler", label: "Ozetler" },
-  { href: "/desenler", label: "Desenler" },
-  { href: "/depo", label: "Depo" },
-  { href: "/sevk-rezerv", label: "Sevk/Rezerv Belgeleri" },
-  { href: "/raporlar", label: "Raporlar" },
-];
-
 export default function Layout({ title, children }) {
   const supabase = createClient();
   const router = useRouter();
   const pathname = usePathname();
   const rootRef = useRef(null);
-  const { displayName, profile, role, isSuperadmin } = useAuthProfile();
+  const { displayName, isReadOnly, menuItems, profile, role } = useAuthProfile();
 
   useEffect(() => {
     const ctx = gsap.context(() => {
@@ -87,11 +78,12 @@ export default function Layout({ title, children }) {
               </div>
             </div>
             <nav data-anim="nav" className="hidden flex-wrap items-center gap-2 md:flex">
-              {navItems.map((item) => {
-                const isActive = pathname === item.href;
+              {menuItems.map((item) => {
+                const isActive =
+                  pathname === item.href || pathname.startsWith(`${item.href}/`);
                 return (
                   <Link
-                    key={item.href}
+                    key={item.key}
                     href={item.href}
                     className={cn(
                       "rounded-full border px-3 py-1.5 text-sm font-semibold transition",
@@ -104,19 +96,6 @@ export default function Layout({ title, children }) {
                   </Link>
                 );
               })}
-              {isSuperadmin ? (
-                <Link
-                  href="/onay-paneli"
-                  className={cn(
-                    "rounded-full border px-3 py-1.5 text-sm font-semibold transition",
-                    pathname === "/onay-paneli"
-                      ? "border-coffee-primary/40 bg-coffee-primary/15 text-neutral-900 shadow-[0_6px_16px_rgba(0,0,0,0.08)]"
-                      : "border-transparent text-neutral-700 hover:border-black/10 hover:bg-white"
-                  )}
-                >
-                  Onay Paneli
-                </Link>
-              ) : null}
             </nav>
           </div>
 
@@ -126,6 +105,11 @@ export default function Layout({ title, children }) {
               <div className="text-xs text-neutral-500">
                 {profile?.email || "-"} | rol: {role}
               </div>
+              {isReadOnly ? (
+                <div className="mt-2 inline-flex rounded-full border border-amber-500/30 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
+                  Salt okunur erisim
+                </div>
+              ) : null}
             </div>
             <button
               onClick={onLogout}
@@ -146,6 +130,11 @@ export default function Layout({ title, children }) {
           <p className="text-sm text-neutral-600 md:text-base">
             Operasyon akislari, desen takibi ve ekip koordinasyonu tek ekranda.
           </p>
+          {isReadOnly ? (
+            <div className="inline-flex rounded-full border border-amber-500/30 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+              Bu hesap yalnizca goruntuleme yetkisine sahiptir.
+            </div>
+          ) : null}
         </div>
 
         <section

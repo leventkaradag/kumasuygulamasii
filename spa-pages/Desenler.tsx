@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Search, SlidersHorizontal, X } from "lucide-react";
+import { useAuthProfile } from "@/components/AuthProfileProvider";
 import Layout from "@/components/Layout";
 import { PatternDetailPanel } from "@/components/PatternDetailPanel";
 import { PatternListItem } from "@/components/PatternListItem";
@@ -182,6 +183,7 @@ const emptyPatternForCreate: Pattern = {
 };
 
 export default function DesenlerPage() {
+  const { permissions } = useAuthProfile();
   const [patterns, setPatterns] = useState<Pattern[]>(seedPatterns);
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<PatternTab>("ACTIVE");
@@ -200,6 +202,8 @@ export default function DesenlerPage() {
     () => getFilteredPatterns(patterns, showArchived, search, filters),
     [patterns, showArchived, search, filters]
   );
+  const canCreatePattern = permissions.patterns.create;
+  const canEditPattern = permissions.patterns.edit;
 
   useEffect(() => {
     if (selectedId && filteredPatterns.some((pattern) => pattern.id === selectedId)) return;
@@ -272,11 +276,13 @@ export default function DesenlerPage() {
   };
 
   const openAddPatternModal = () => {
+    if (!canCreatePattern) return;
     setPatternModalMode("add");
     setShowPatternModal(true);
   };
 
   const openEditPatternModal = () => {
+    if (!canEditPattern) return;
     if (!selectedPattern) return;
     setPatternModalMode("edit");
     setShowPatternModal(true);
@@ -339,6 +345,7 @@ export default function DesenlerPage() {
                 Filtre
               </button>
               <div className="grow" />
+              {canCreatePattern ? (
               <button
                 type="button"
                 onClick={openAddPatternModal}
@@ -346,6 +353,8 @@ export default function DesenlerPage() {
               >
                 + Desen Ekle
               </button>
+              ) : null}
+              {canEditPattern ? (
               <button
                 type="button"
                 disabled={!selectedPattern}
@@ -359,6 +368,7 @@ export default function DesenlerPage() {
               >
                 Deseni Düzenle
               </button>
+              ) : null}
             </div>
           </div>
         </div>
@@ -393,7 +403,7 @@ export default function DesenlerPage() {
           </div>
         </div>
 
-        {showPatternModal && modalPattern && (
+        {showPatternModal && modalPattern && (canCreatePattern || canEditPattern) && (
           <PatternModal
             pattern={modalPattern}
             onClose={() => setShowPatternModal(false)}

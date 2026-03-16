@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { getAuthenticatedRedirectPath, normalizeProfileStatus } from '@/lib/supabase/profile-access'
+import { getAuthenticatedRedirectPath, normalizeProfileRole, normalizeProfileStatus } from '@/lib/supabase/profile-access'
 
 export default function LoginPage() {
   const supabase = createClient()
@@ -34,7 +34,7 @@ export default function LoginPage() {
     const profileResult = data.user
       ? await supabase
           .from('profiles')
-          .select('status')
+          .select('status,role')
           .eq('id', data.user.id)
           .maybeSingle()
       : null
@@ -43,7 +43,10 @@ export default function LoginPage() {
 
     const nextPath =
       profileResult?.data && !profileResult.error
-        ? getAuthenticatedRedirectPath(normalizeProfileStatus(profileResult.data.status))
+        ? getAuthenticatedRedirectPath({
+            role: normalizeProfileRole(profileResult.data.role),
+            status: normalizeProfileStatus(profileResult.data.status),
+          })
         : '/pending'
 
     router.replace(nextPath)

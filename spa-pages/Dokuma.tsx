@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import Image from "next/image";
 
+import { useAuthProfile } from "@/components/AuthProfileProvider";
 import Layout from "../components/Layout";
 import { cn } from "@/lib/cn";
 import type { Dyehouse } from "@/lib/domain/dyehouse";
@@ -379,6 +380,7 @@ const createEmptyNewPatternForm = (): NewPatternForm => ({
 });
 
 export default function Dokuma() {
+  const { permissions } = useAuthProfile();
   const [plans, setPlans] = useState<WeavingPlan[]>(() => weavingLocalRepo.listPlans());
   const [progressEntries, setProgressEntries] = useState<WeavingProgressEntry[]>(() =>
     weavingLocalRepo.listProgress()
@@ -428,6 +430,12 @@ export default function Dokuma() {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | WeavingPlanStatus>("ALL");
   const [sortKey, setSortKey] = useState<PlanSortOption>("created_desc");
+  const canCreatePlans = permissions.weaving.create;
+  const canEditWeaving = permissions.weaving.edit;
+  const canAdvanceWeaving = permissions.weaving.advance;
+  const canCreatePatterns = permissions.patterns.create;
+  const canManageDispatch = permissions.dispatch.create;
+  const canEditDispatch = permissions.dispatch.edit || permissions.dispatch.delete;
 
   const refreshData = () => {
     setPlans(weavingLocalRepo.listPlans());
@@ -749,6 +757,7 @@ export default function Dokuma() {
   };
 
   const openPlanModal = () => {
+    if (!canCreatePlans) return;
     setPlanModalOpen(true);
     setPlanModalStep("form");
     setSelectedPatternId((current) => {
@@ -863,6 +872,7 @@ export default function Dokuma() {
   };
 
   const handleCreatePatternFromSelector = () => {
+    if (!canCreatePatterns) return;
     try {
       const normalizedCode = newPatternForm.code.trim();
       if (!normalizedCode) throw new Error("Kumas kodu zorunlu.");
@@ -905,6 +915,7 @@ export default function Dokuma() {
   };
 
   const handleCreatePlan = () => {
+    if (!canCreatePlans) return;
     try {
       if (!selectedPattern) throw new Error("Desen secimi zorunlu.");
       const plannedMeters = toPositiveNumber(plannedMetersInput, "Plan metre");
@@ -949,6 +960,7 @@ export default function Dokuma() {
   };
 
   const handleAddProgress = () => {
+    if (!canEditWeaving) return;
     if (!progressPlanId) return;
 
     try {
@@ -990,6 +1002,7 @@ export default function Dokuma() {
   };
 
   const handleDeleteProgress = (id: string) => {
+    if (!canEditWeaving) return;
     weavingLocalRepo.deleteProgress(id);
     refreshData();
   };
@@ -1017,6 +1030,7 @@ export default function Dokuma() {
   };
 
   const handleAddDyehouse = () => {
+    if (!canManageDispatch) return;
     try {
       const added = dyehouseLocalRepo.addByName(newDyehouseName);
       const next = dyehouseLocalRepo.list();
@@ -1031,6 +1045,7 @@ export default function Dokuma() {
   };
 
   const handleDeleteDyehouse = () => {
+    if (!canEditDispatch) return;
     if (!transferDyehouseId) return;
     const target = dyehouses.find((item) => item.id === transferDyehouseId);
     const label = target?.name ?? "secili boyahane";
@@ -1048,6 +1063,7 @@ export default function Dokuma() {
   };
 
   const handleAddTransfer = () => {
+    if (!canManageDispatch) return;
     if (!transferPlanId) return;
 
     try {
@@ -1132,17 +1148,20 @@ export default function Dokuma() {
   };
 
   const handleDeleteTransfer = (id: string) => {
+    if (!canEditDispatch) return;
     weavingLocalRepo.deleteTransfer(id);
     refreshData();
   };
 
   const handleToggleManualCompleted = (plan: WeavingPlan) => {
+    if (!canAdvanceWeaving) return;
     const completed = !(plan.status === "COMPLETED" && plan.manualCompletedAt);
     weavingLocalRepo.setManualCompleted(plan.id, completed);
     refreshData();
   };
 
   const handleCancelPlan = (plan: WeavingPlan) => {
+    if (!canAdvanceWeaving) return;
     if (!window.confirm(`${plan.patternNoSnapshot} planini iptal etmek istiyor musunuz?`)) return;
     weavingLocalRepo.updatePlanStatus(plan.id, "CANCELLED");
     refreshData();
@@ -1161,13 +1180,15 @@ export default function Dokuma() {
         <section className="rounded-xl border border-black/10 bg-white p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-semibold text-neutral-900">Dokuma Planlari</h2>
-            <button
-              type="button"
-              onClick={openPlanModal}
-              className="rounded-lg bg-coffee-primary px-3 py-2 text-sm font-semibold text-white transition hover:brightness-95"
-            >
-              Dokuma Plani Olustur
-            </button>
+            {canCreatePlans ? (
+              <button
+                type="button"
+                onClick={openPlanModal}
+                className="rounded-lg bg-coffee-primary px-3 py-2 text-sm font-semibold text-white transition hover:brightness-95"
+              >
+                Dokuma Plani Olustur
+              </button>
+            ) : null}
           </div>
 
           <div className="mt-3 grid gap-2 rounded-lg border border-black/10 bg-neutral-50 p-2 lg:grid-cols-[minmax(0,1fr)_170px_280px_auto]">
@@ -1302,31 +1323,37 @@ export default function Dokuma() {
                           >
                             Detaylar
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => openProgressModal(plan.id)}
-                            disabled={isCancelled}
-                            className="rounded border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            Ilerleme Gir
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openTransferModal(plan.id)}
-                            disabled={isCancelled}
-                            className="rounded border border-sky-500/30 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            Boyahane / Depo Sevk
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleToggleManualCompleted(plan)}
-                            disabled={isCancelled}
-                            className="rounded border border-emerald-500/30 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            {isManualCompleted ? "Tamamlandi (Geri Al)" : "Tamamlandi"}
-                          </button>
-                          {!isCancelled ? (
+                          {canEditWeaving ? (
+                            <button
+                              type="button"
+                              onClick={() => openProgressModal(plan.id)}
+                              disabled={isCancelled}
+                              className="rounded border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              Ilerleme Gir
+                            </button>
+                          ) : null}
+                          {canManageDispatch ? (
+                            <button
+                              type="button"
+                              onClick={() => openTransferModal(plan.id)}
+                              disabled={isCancelled}
+                              className="rounded border border-sky-500/30 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              Boyahane / Depo Sevk
+                            </button>
+                          ) : null}
+                          {canAdvanceWeaving ? (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleManualCompleted(plan)}
+                              disabled={isCancelled}
+                              className="rounded border border-emerald-500/30 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              {isManualCompleted ? "Tamamlandi (Geri Al)" : "Tamamlandi"}
+                            </button>
+                          ) : null}
+                          {!isCancelled && canAdvanceWeaving ? (
                             <button
                               type="button"
                               onClick={() => handleCancelPlan(plan)}
@@ -1469,13 +1496,15 @@ export default function Dokuma() {
                   >
                     İptal
                   </button>
-                  <button
-                    type="button"
-                    onClick={handleCreatePlan}
-                    className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white hover:bg-coffee-primary/90"
-                  >
-                    Kaydet
-                  </button>
+                  {canCreatePlans ? (
+                    <button
+                      type="button"
+                      onClick={handleCreatePlan}
+                      className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white hover:bg-coffee-primary/90"
+                    >
+                      Kaydet
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ) : (
@@ -1743,13 +1772,15 @@ export default function Dokuma() {
                       </div>
 
                       <div className="flex justify-end pt-2">
-                        <button
-                          type="button"
-                          onClick={handleCreatePatternFromSelector}
-                          className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
-                        >
-                          Yeni Desen Kaydet ve Sec
-                        </button>
+                        {canCreatePatterns ? (
+                          <button
+                            type="button"
+                            onClick={handleCreatePatternFromSelector}
+                            className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
+                          >
+                            Yeni Desen Kaydet ve Sec
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                   )}
@@ -1884,13 +1915,15 @@ export default function Dokuma() {
                         {formatDateTime(entry.createdAt)} - {fmt(entry.meters)} m
                         {entry.note ? ` (${entry.note})` : ""}
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteProgress(entry.id)}
-                        className="rounded border border-rose-500/30 bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100"
-                      >
-                        Sil
-                      </button>
+                      {canEditWeaving ? (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteProgress(entry.id)}
+                          className="rounded border border-rose-500/30 bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100"
+                        >
+                          Sil
+                        </button>
+                      ) : null}
                     </div>
                   ))}
                   {recentProgressForModal.length === 0 ? <div>Kayit yok.</div> : null}
@@ -1907,13 +1940,15 @@ export default function Dokuma() {
             >
               Kapat
             </button>
-            <button
-              type="button"
-              onClick={handleAddProgress}
-              className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
-            >
-              Kaydet
-            </button>
+            {canEditWeaving ? (
+              <button
+                type="button"
+                onClick={handleAddProgress}
+                className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
+              >
+                Kaydet
+              </button>
+            ) : null}
           </div>
         </Modal>
       ) : null}
@@ -1985,21 +2020,25 @@ export default function Dokuma() {
                     placeholder="+ Boyahane ekle"
                     className="min-w-0 flex-1 rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
                   />
-                  <button
-                    type="button"
-                    onClick={handleAddDyehouse}
-                    className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
-                  >
-                    Ekle
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDeleteDyehouse}
-                    disabled={!transferDyehouseId}
-                    className="rounded-lg border border-rose-500/30 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Seciliyi Sil
-                  </button>
+                  {canManageDispatch ? (
+                    <button
+                      type="button"
+                      onClick={handleAddDyehouse}
+                      className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                    >
+                      Ekle
+                    </button>
+                  ) : null}
+                  {canEditDispatch ? (
+                    <button
+                      type="button"
+                      onClick={handleDeleteDyehouse}
+                      disabled={!transferDyehouseId}
+                      className="rounded-lg border border-rose-500/30 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Seciliyi Sil
+                    </button>
+                  ) : null}
                 </div>
 
                 {dyehouses.length === 0 ? (
@@ -2120,13 +2159,15 @@ export default function Dokuma() {
                         : ""}
                       {entry.note ? ` (${entry.note})` : ""}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteTransfer(entry.id)}
-                      className="rounded border border-rose-500/30 bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100"
-                    >
-                      Sil
-                    </button>
+                    {canEditDispatch ? (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteTransfer(entry.id)}
+                        className="rounded border border-rose-500/30 bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100"
+                      >
+                        Sil
+                      </button>
+                    ) : null}
                   </div>
                 ))}
                 {recentTransfersForModal.length === 0 ? <div>Kayit yok.</div> : null}
@@ -2142,13 +2183,15 @@ export default function Dokuma() {
             >
               Kapat
             </button>
-            <button
-              type="button"
-              onClick={handleAddTransfer}
-              className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
-            >
-              Kaydet
-            </button>
+            {canManageDispatch ? (
+              <button
+                type="button"
+                onClick={handleAddTransfer}
+                className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
+              >
+                Kaydet
+              </button>
+            ) : null}
           </div>
         </Modal>
       ) : null}
@@ -2268,6 +2311,7 @@ function WeavingDetailContent({
   onPatternUpdated,
   onPlanUpdated,
 }: WeavingDetailContentProps) {
+  const { permissions } = useAuthProfile();
   const [activeTab, setActiveTab] = useState<DetailTab>("INFO");
   const [digitalPreviewUrl, setDigitalPreviewUrl] = useState<string | null>(null);
   const [finalPreviewUrl, setFinalPreviewUrl] = useState<string | null>(null);
@@ -2294,6 +2338,8 @@ function WeavingDetailContent({
       notes: string;
     }>
   >([]);
+  const canEditPatterns = permissions.patterns.edit;
+  const canEditVariants = permissions.weaving.edit;
 
   const createVariantRowId = () => {
     const randomUUID = globalThis.crypto?.randomUUID;
@@ -2352,6 +2398,7 @@ function WeavingDetailContent({
   }, [fabricSaveSuccess]);
 
   const savePatternImage = (target: "DIGITAL" | "FINAL", dataUrl: string) => {
+    if (!canEditPatterns) throw new Error("Bu hesap desen gorseli guncelleyemez.");
     if (!pattern) throw new Error("Desen kaydi bulunamadi.");
 
     const nextPatch =
@@ -2426,6 +2473,7 @@ function WeavingDetailContent({
   };
 
   const openFabricEditor = () => {
+    if (!canEditPatterns) return;
     setFabricDraft(createFabricDraftFromPattern(pattern));
     setFabricSaveError("");
     setFabricSaveSuccess("");
@@ -2440,6 +2488,7 @@ function WeavingDetailContent({
   };
 
   const saveFabricDetails = () => {
+    if (!canEditPatterns) return;
     if (!pattern) return;
 
     try {
@@ -2492,6 +2541,7 @@ function WeavingDetailContent({
   };
 
   const openVariantEditor = () => {
+    if (!canEditVariants) return;
     const rows =
       planVariants.length > 0
         ? planVariants.map((variant) => ({
@@ -2536,6 +2586,7 @@ function WeavingDetailContent({
   };
 
   const addVariantRow = () => {
+    if (!canEditVariants) return;
     setVariantRows((prev) => [
       ...prev,
       {
@@ -2551,10 +2602,12 @@ function WeavingDetailContent({
   };
 
   const removeVariantRow = (id: string) => {
+    if (!canEditVariants) return;
     setVariantRows((prev) => prev.filter((row) => row.id !== id));
   };
 
   const saveVariants = () => {
+    if (!canEditVariants) return;
     try {
       if (variantRows.length === 0) {
         throw new Error("En az bir varyant eklemelisiniz.");
@@ -2648,7 +2701,7 @@ function WeavingDetailContent({
                 <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
                   Kumas Detaylari
                 </div>
-                {!isEditingFabric ? (
+                {!isEditingFabric && canEditPatterns ? (
                   <button
                     type="button"
                     onClick={openFabricEditor}
@@ -2657,7 +2710,7 @@ function WeavingDetailContent({
                   >
                     Duzenle
                   </button>
-                ) : (
+                ) : isEditingFabric ? (
                   <div className="flex gap-2">
                     <button
                       type="button"
@@ -2675,7 +2728,7 @@ function WeavingDetailContent({
                       Kaydet
                     </button>
                   </div>
-                )}
+                ) : null}
               </div>
 
               {isEditingFabric ? (
@@ -2808,13 +2861,15 @@ function WeavingDetailContent({
               <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
                 Varyantlar
               </div>
-              <button
-                type="button"
-                onClick={openVariantEditor}
-                className="rounded-lg border border-black/10 bg-neutral-50 px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
-              >
-                Varyantlari Duzenle
-              </button>
+              {canEditVariants ? (
+                <button
+                  type="button"
+                  onClick={openVariantEditor}
+                  className="rounded-lg border border-black/10 bg-neutral-50 px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                >
+                  Varyantlari Duzenle
+                </button>
+              ) : null}
             </div>
 
             {planVariants.length > 0 ? (
@@ -2870,14 +2925,16 @@ function WeavingDetailContent({
                   Fotograf yok
                 </div>
               )}
-              <button
-                type="button"
-                onClick={() => digitalInputRef.current?.click()}
-                disabled={!pattern}
-                className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {digitalSrc ? "Foto Degistir" : "Foto Ekle"}
-              </button>
+              {canEditPatterns ? (
+                <button
+                  type="button"
+                  onClick={() => digitalInputRef.current?.click()}
+                  disabled={!pattern}
+                  className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {digitalSrc ? "Foto Degistir" : "Foto Ekle"}
+                </button>
+              ) : null}
               <input
                 ref={digitalInputRef}
                 type="file"
@@ -2901,14 +2958,16 @@ function WeavingDetailContent({
                   Fotograf yok
                 </div>
               )}
-              <button
-                type="button"
-                onClick={() => finalInputRef.current?.click()}
-                disabled={!pattern}
-                className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {finalSrc ? "Foto Degistir" : "Foto Ekle"}
-              </button>
+              {canEditPatterns ? (
+                <button
+                  type="button"
+                  onClick={() => finalInputRef.current?.click()}
+                  disabled={!pattern}
+                  className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {finalSrc ? "Foto Degistir" : "Foto Ekle"}
+                </button>
+              ) : null}
               <input
                 ref={finalInputRef}
                 type="file"
@@ -2980,13 +3039,15 @@ function WeavingDetailContent({
                       <td className="px-2 py-2 text-xs text-neutral-700">{fmt(row.wovenMeters)}</td>
                       <td className="px-2 py-2 text-xs text-neutral-700">{fmt(row.shippedMeters)}</td>
                       <td className="px-2 py-2">
-                        <button
-                          type="button"
-                          onClick={() => removeVariantRow(row.id)}
-                          className="rounded border border-rose-500/30 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100"
-                        >
-                          Sil
-                        </button>
+                        {canEditVariants ? (
+                          <button
+                            type="button"
+                            onClick={() => removeVariantRow(row.id)}
+                            className="rounded border border-rose-500/30 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100"
+                          >
+                            Sil
+                          </button>
+                        ) : null}
                       </td>
                     </tr>
                   ))}
@@ -2995,13 +3056,15 @@ function WeavingDetailContent({
             </div>
 
             <div className="flex justify-between gap-2">
-              <button
-                type="button"
-                onClick={addVariantRow}
-                className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
-              >
-                + Satir Ekle
-              </button>
+              {canEditVariants ? (
+                <button
+                  type="button"
+                  onClick={addVariantRow}
+                  className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                >
+                  + Satir Ekle
+                </button>
+              ) : null}
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -3010,13 +3073,15 @@ function WeavingDetailContent({
                 >
                   Kapat
                 </button>
-                <button
-                  type="button"
-                  onClick={saveVariants}
-                  className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
-                >
-                  Kaydet
-                </button>
+                {canEditVariants ? (
+                  <button
+                    type="button"
+                    onClick={saveVariants}
+                    className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
+                  >
+                    Kaydet
+                  </button>
+                ) : null}
               </div>
             </div>
 

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { ExternalLink, Search } from "lucide-react";
+import { useAuthProfile } from "@/components/AuthProfileProvider";
 import Layout from "@/components/Layout";
 import { cn } from "@/lib/cn";
 import type { DepoTransaction, DepoTransactionLine, DepoTransactionType } from "@/lib/domain/depoTransaction";
@@ -108,6 +109,7 @@ const buildPatternLabels = (lines: DepoTransactionLine[]) => {
 };
 
 export default function SevkRezervBelgeleriPage() {
+  const { permissions } = useAuthProfile();
   const [transactions, setTransactions] = useState<DepoTransaction[]>([]);
   const [lines, setLines] = useState<DepoTransactionLine[]>([]);
   const [dispatchDocuments, setDispatchDocuments] = useState<WeavingDispatchDocument[]>([]);
@@ -118,6 +120,11 @@ export default function SevkRezervBelgeleriPage() {
   const [detailTransactionId, setDetailTransactionId] = useState<string | null>(null);
   const [detailDispatchDocumentId, setDetailDispatchDocumentId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
+  const canReverseTransactions =
+    permissions.dispatch.edit ||
+    permissions.dispatch.delete ||
+    permissions.reservation.edit ||
+    permissions.reservation.delete;
 
   const refreshData = () => {
     setTransactions(depoTransactionsLocalRepo.listTransactions());
@@ -256,6 +263,7 @@ export default function SevkRezervBelgeleriPage() {
   );
 
   const handleReverseTransaction = () => {
+    if (!canReverseTransactions) return;
     if (!detailRow) return;
 
     const target = detailRow.transaction;
@@ -551,7 +559,8 @@ export default function SevkRezervBelgeleriPage() {
               Yazdir
               <ExternalLink className="h-4 w-4" />
             </Link>
-            {detailRow.transaction.status !== "REVERSED" &&
+            {canReverseTransactions &&
+            detailRow.transaction.status !== "REVERSED" &&
             (detailRow.transaction.type === "SHIPMENT" || detailRow.transaction.type === "RESERVATION") ? (
               <button
                 type="button"
