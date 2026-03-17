@@ -63,6 +63,13 @@ const normalizeOptionalNonNegativeNumber = (value: unknown): number | undefined 
   return numeric;
 };
 
+const normalizeOptionalNumber = (value: unknown): number | undefined => {
+  if (value === null || value === undefined || value === "") return undefined;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return undefined;
+  return numeric;
+};
+
 const toIsoDate = (value: string, label: string) => {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
@@ -117,7 +124,7 @@ const normalizeStoredLine = (input: unknown): DyehouseLine | null => {
     metersPlanned,
     inputKg: normalizeOptionalNonNegativeNumber(raw.inputKg),
     outputKg: normalizeOptionalNonNegativeNumber(raw.outputKg),
-    wasteKg: normalizeOptionalNonNegativeNumber(raw.wasteKg),
+    wasteKg: normalizeOptionalNumber(raw.wasteKg),
     notes: normalizeText(raw.notes),
   };
 };
@@ -133,7 +140,7 @@ const normalizeLineInput = (input: DyehouseLine): DyehouseLine => {
     metersPlanned,
     inputKg: normalizeOptionalNonNegativeNumber(input.inputKg),
     outputKg: normalizeOptionalNonNegativeNumber(input.outputKg),
-    wasteKg: normalizeOptionalNonNegativeNumber(input.wasteKg),
+    wasteKg: normalizeOptionalNumber(input.wasteKg),
     notes: normalizeText(input.notes),
   };
 };

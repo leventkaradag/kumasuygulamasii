@@ -1,6 +1,13 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from "react";
 import Image from "next/image";
 
 import { useAuthProfile } from "@/components/AuthProfileProvider";
@@ -19,6 +26,7 @@ import type {
 import { dyehouseLocalRepo } from "@/lib/repos/dyehouseLocalRepo";
 import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
 import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
+import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 
 const fmt = (value: number) =>
   value.toLocaleString("tr-TR", { maximumFractionDigits: 2 });
@@ -53,6 +61,14 @@ const toPositiveNumber = (value: string, label: string) => {
   const parsed = Number(value.trim().replace(",", "."));
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(`${label} 0'dan buyuk olmali.`);
+  }
+  return parsed;
+};
+
+const toPositiveInt = (value: string, label: string) => {
+  const parsed = Number(value.trim());
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} 1 veya daha buyuk tam sayi olmali.`);
   }
   return parsed;
 };
@@ -185,6 +201,14 @@ const getFabricDetailItems = (pattern: Pattern | null): FabricDetailItem[] => {
       label: "Tarak Eni (cm)",
       value: toDisplayMetric(readPatternField(pattern, ["tarakEniCm", "reedWidthCm"]), "cm"),
     },
+    { label: "Tarak No", value: toDisplayText(readPatternField(pattern, ["tarakNo"])) },
+    { label: "Cozgu Gr", value: toDisplayText(readPatternField(pattern, ["cozguGr"])) },
+    { label: "Atki Gr", value: toDisplayText(readPatternField(pattern, ["atkiGr"])) },
+    { label: "Mt Tul", value: toDisplayText(readPatternField(pattern, ["mtTul"])) },
+    {
+      label: "Opsiyonel Not",
+      value: toDisplayText(readPatternField(pattern, ["opsiyonelNot", "weavingDetailsNote"])),
+    },
     {
       label: "Gramaj",
       value: toDisplayMetric(readPatternField(pattern, ["gramajGm2", "weight", "gramaj"]), "g/m2"),
@@ -233,7 +257,12 @@ type FabricDraft = {
   atkiSayi: string;
   atkiIplik: string;
   toplamTel: string;
+  tarakNo: string;
   tarakEniCm: string;
+  cozguGr: string;
+  atkiGr: string;
+  mtTul: string;
+  opsiyonelNot: string;
 };
 
 const normalizeDraftText = (value: string | null | undefined) => {
@@ -253,13 +282,12 @@ const splitCountAndYarn = (value: string | null | undefined) => {
   };
 };
 
+const normalizeDraftMetric = (value: number | null | undefined) =>
+  typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+
 const createFabricDraftFromPattern = (pattern: Pattern | null): FabricDraft => {
   const warp = splitCountAndYarn(pattern?.warpCount);
   const weft = splitCountAndYarn(pattern?.weftCount);
-  const tarakEniCm =
-    typeof pattern?.tarakEniCm === "number" && Number.isFinite(pattern.tarakEniCm)
-      ? String(pattern.tarakEniCm)
-      : "";
 
   return {
     color: normalizeDraftText(pattern?.color),
@@ -269,7 +297,12 @@ const createFabricDraftFromPattern = (pattern: Pattern | null): FabricDraft => {
     atkiSayi: weft.count,
     atkiIplik: weft.yarn,
     toplamTel: normalizeDraftText(pattern?.totalEnds),
-    tarakEniCm,
+    tarakNo: normalizeDraftText(pattern?.tarakNo),
+    tarakEniCm: normalizeDraftMetric(pattern?.tarakEniCm),
+    cozguGr: normalizeDraftMetric(pattern?.cozguGr),
+    atkiGr: normalizeDraftMetric(pattern?.atkiGr),
+    mtTul: normalizeDraftMetric(pattern?.mtTul),
+    opsiyonelNot: normalizeDraftText(pattern?.opsiyonelNot),
   };
 };
 
@@ -281,7 +314,12 @@ const isFabricDraftEqual = (left: FabricDraft, right: FabricDraft) =>
   left.atkiSayi === right.atkiSayi &&
   left.atkiIplik === right.atkiIplik &&
   left.toplamTel === right.toplamTel &&
-  left.tarakEniCm === right.tarakEniCm;
+  left.tarakNo === right.tarakNo &&
+  left.tarakEniCm === right.tarakEniCm &&
+  left.cozguGr === right.cozguGr &&
+  left.atkiGr === right.atkiGr &&
+  left.mtTul === right.mtTul &&
+  left.opsiyonelNot === right.opsiyonelNot;
 
 type PlanTotals = {
   plannedMeters: number;
@@ -302,6 +340,8 @@ type PlanSortOption =
   | "woven_desc"
   | "remaining_desc";
 
+type PlanListFilter = "OPEN" | "ALL" | WeavingPlanStatus;
+
 const planSortOptions: Array<{ value: PlanSortOption; label: string }> = [
   { value: "created_desc", label: "Eklenme Tarihi (Yeni -> Eski)" },
   { value: "created_asc", label: "Eklenme Tarihi (Eski -> Yeni)" },
@@ -311,6 +351,28 @@ const planSortOptions: Array<{ value: PlanSortOption; label: string }> = [
   { value: "woven_desc", label: "Dokunan (Buyuk -> Kucuk)" },
   { value: "remaining_desc", label: "Kalan (Buyuk -> Kucuk)" },
 ];
+
+const planStatusLabels: Record<WeavingPlanStatus, string> = {
+  ACTIVE: "Aktif",
+  COMPLETED: "Tamamlandi",
+  CANCELLED: "Iptal / Arsiv",
+};
+
+const planListFilterOptions: Array<{ value: PlanListFilter; label: string }> = [
+  { value: "OPEN", label: "Aktif Liste" },
+  { value: "ACTIVE", label: "Sadece Aktif" },
+  { value: "COMPLETED", label: "Tamamlananlar" },
+  { value: "CANCELLED", label: "Iptal / Arsiv" },
+  { value: "ALL", label: "Tum Planlar" },
+];
+
+type WarningConfirmState = {
+  title: string;
+  summary: string;
+  messages: string[];
+  confirmLabel: string;
+  onConfirm: () => void;
+};
 
 const fallbackPlanTotals = (plan: WeavingPlan): PlanTotals => ({
   plannedMeters: hasPlanVariants(plan)
@@ -342,6 +404,74 @@ const sumPlanVariantWovenMeters = (variants: WeavingPlanVariant[]) =>
 
 const sumPlanVariantShippedMeters = (variants: WeavingPlanVariant[]) =>
   variants.reduce((sum, variant) => sum + variant.shippedMeters, 0);
+
+const EPSILON = 1e-6;
+
+const getVariantDisplayName = (variant: WeavingPlanVariant) =>
+  [variant.variantCode?.trim(), variant.colorName.trim()].filter(Boolean).join(" / ");
+
+const getPlanWarningMessages = (plan: WeavingPlan, totals: PlanTotals) => {
+  const warnings: string[] = [];
+
+  if (hasPlanVariants(plan)) {
+    plan.variants
+      .filter((variant) => variant.wovenMeters - variant.plannedMeters > EPSILON)
+      .slice(0, 2)
+      .forEach((variant) => {
+        warnings.push(`${getVariantDisplayName(variant)} plan metresini asti.`);
+      });
+  }
+
+  if (totals.wovenMeters - totals.plannedMeters > EPSILON) {
+    warnings.push("Toplam dokuma, plan metresinin uzerinde gorunuyor.");
+  }
+
+  if (totals.totalSentMeters - totals.wovenMeters > EPSILON) {
+    warnings.push("Sevk toplami, dokunan metreden fazla gorunuyor.");
+  }
+
+  if (
+    plan.status === "COMPLETED" &&
+    plan.manualCompletedAt &&
+    totals.plannedMeters - totals.wovenMeters > EPSILON
+  ) {
+    warnings.push("Plan tamamlandi olarak isaretli ama eksik dokuma var.");
+  }
+
+  return warnings;
+};
+
+const getProgressWarningMessages = (
+  plan: WeavingPlan,
+  totals: PlanTotals,
+  variantId: string,
+  progressMeters: number
+) => {
+  const warnings: string[] = [];
+
+  if (hasPlanVariants(plan)) {
+    const variant = plan.variants.find((item) => item.id === variantId);
+    if (variant && variant.wovenMeters + progressMeters - variant.plannedMeters > EPSILON) {
+      warnings.push(`${getVariantDisplayName(variant)} icin giris, varyant planini asiyor.`);
+    }
+  }
+
+  if (totals.wovenMeters + progressMeters - totals.plannedMeters > EPSILON) {
+    warnings.push("Bu giris toplam plan metresini asiyor.");
+  }
+
+  return warnings;
+};
+
+const getCompletionWarningMessages = (plan: WeavingPlan, totals: PlanTotals) => {
+  const warnings = getPlanWarningMessages(plan, totals);
+
+  if (totals.plannedMeters - totals.wovenMeters > EPSILON) {
+    warnings.unshift("Plan eksik dokunmus durumda; yine de tamamlandi olarak isaretlenecek.");
+  }
+
+  return Array.from(new Set(warnings));
+};
 
 type PatternSelectorTab = "SELECT" | "NEW";
 
@@ -413,6 +543,7 @@ export default function Dokuma() {
   const [progressVariantId, setProgressVariantId] = useState("");
   const [progressDateTime, setProgressDateTime] = useState(nowDateTimeLocal());
   const [progressMetersInput, setProgressMetersInput] = useState("");
+  const [progressUnitCountInput, setProgressUnitCountInput] = useState("1");
   const [progressNote, setProgressNote] = useState("");
   const [progressError, setProgressError] = useState("");
 
@@ -428,14 +559,18 @@ export default function Dokuma() {
   const [transferError, setTransferError] = useState("");
   const [detailPlanId, setDetailPlanId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"ALL" | WeavingPlanStatus>("ALL");
+  const [statusFilter, setStatusFilter] = useState<PlanListFilter>("OPEN");
   const [sortKey, setSortKey] = useState<PlanSortOption>("created_desc");
+  const [warningConfirm, setWarningConfirm] = useState<WarningConfirmState | null>(null);
+  const planModalRef = useRef<HTMLDivElement | null>(null);
   const canCreatePlans = permissions.weaving.create;
   const canEditWeaving = permissions.weaving.edit;
   const canAdvanceWeaving = permissions.weaving.advance;
   const canCreatePatterns = permissions.patterns.create;
   const canManageDispatch = permissions.dispatch.create;
   const canEditDispatch = permissions.dispatch.edit || permissions.dispatch.delete;
+
+  useModalFocusTrap({ enabled: planModalOpen, containerRef: planModalRef });
 
   const refreshData = () => {
     setPlans(weavingLocalRepo.listPlans());
@@ -520,17 +655,15 @@ export default function Dokuma() {
     };
   }, [plans, planTotalsById]);
 
-  const availableStatuses = useMemo<WeavingPlanStatus[]>(() => {
-    const all = new Set<WeavingPlanStatus>(["ACTIVE", "COMPLETED", "CANCELLED"]);
-    plans.forEach((plan) => all.add(plan.status));
-    return Array.from(all);
-  }, [plans]);
-
   const filteredAndSortedPlans = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase("tr-TR");
 
     const byStatus =
-      statusFilter === "ALL" ? plans : plans.filter((plan) => plan.status === statusFilter);
+      statusFilter === "ALL"
+        ? plans
+        : statusFilter === "OPEN"
+          ? plans.filter((plan) => plan.status !== "CANCELLED")
+          : plans.filter((plan) => plan.status === statusFilter);
 
     const byQuery =
       normalizedQuery.length === 0
@@ -596,6 +729,37 @@ export default function Dokuma() {
     () => (hasPlanVariants(selectedProgressPlan) ? selectedProgressPlan.variants : []),
     [selectedProgressPlan]
   );
+
+  const selectedProgressTotals = useMemo(() => {
+    if (!selectedProgressPlan) return null;
+    return resolvePlanTotals(selectedProgressPlan, planTotalsById);
+  }, [selectedProgressPlan, planTotalsById]);
+
+  const progressCalculatedTotal = useMemo(() => {
+    const metersPerUnit = Number(progressMetersInput.trim().replace(",", "."));
+    const unitCount = Number(progressUnitCountInput.trim());
+    if (!Number.isFinite(metersPerUnit) || metersPerUnit <= 0) return 0;
+    if (!Number.isFinite(unitCount) || !Number.isInteger(unitCount) || unitCount <= 0) return 0;
+    return metersPerUnit * unitCount;
+  }, [progressMetersInput, progressUnitCountInput]);
+
+  const progressWarnings = useMemo(() => {
+    if (!selectedProgressPlan || !selectedProgressTotals || progressCalculatedTotal <= 0) {
+      return [];
+    }
+
+    return getProgressWarningMessages(
+      selectedProgressPlan,
+      selectedProgressTotals,
+      progressVariantId,
+      progressCalculatedTotal
+    );
+  }, [
+    selectedProgressPlan,
+    selectedProgressTotals,
+    progressCalculatedTotal,
+    progressVariantId,
+  ]);
 
   const selectedTransferPlan = useMemo(
     () => plans.find((plan) => plan.id === transferPlanId) ?? null,
@@ -717,7 +881,7 @@ export default function Dokuma() {
         transferVariantMetersTotal > 0 &&
         totals.totalSentMeters + transferVariantMetersTotal > totals.wovenMeters
       ) {
-        return "Ceylan'a sevk, dokunan metreden fazla gorunuyor; rapor gecikmis olabilir.";
+        return "Bu sevk sonrasi toplam sevk, dokunan metreden fazla gorunuyor olabilir.";
       }
       return "";
     }
@@ -725,7 +889,7 @@ export default function Dokuma() {
     const parsedMeters = Number(transferMetersInput.trim().replace(",", "."));
     if (!Number.isFinite(parsedMeters) || parsedMeters <= 0) return "";
     if (totals.totalSentMeters + parsedMeters > totals.wovenMeters) {
-      return "Ceylan'a sevk, dokunan metreden fazla gorunuyor; rapor gecikmis olabilir.";
+      return "Bu sevk sonrasi toplam sevk, dokunan metreden fazla gorunuyor olabilir.";
     }
     return "";
   }, [
@@ -919,8 +1083,8 @@ export default function Dokuma() {
     try {
       if (!selectedPattern) throw new Error("Desen secimi zorunlu.");
       const plannedMeters = toPositiveNumber(plannedMetersInput, "Plan metre");
-      const tarakEniCm = tarakEniInput.trim()
-        ? toPositiveNumber(tarakEniInput, "Tarak Eni")
+      const hamKumasEniCm = tarakEniInput.trim()
+        ? toPositiveNumber(tarakEniInput, "Ham Kumas Eni")
         : null;
 
       weavingLocalRepo.createPlan({
@@ -928,7 +1092,7 @@ export default function Dokuma() {
         patternNoSnapshot: selectedPattern.fabricCode,
         patternNameSnapshot: selectedPattern.fabricName,
         plannedMeters,
-        tarakEniCm,
+        hamKumasEniCm,
         note: planNote.trim() || undefined,
       });
 
@@ -949,6 +1113,7 @@ export default function Dokuma() {
     );
     setProgressDateTime(nowDateTimeLocal());
     setProgressMetersInput("");
+    setProgressUnitCountInput("1");
     setProgressNote("");
     setProgressError("");
   };
@@ -956,6 +1121,10 @@ export default function Dokuma() {
   const closeProgressModal = () => {
     setProgressPlanId(null);
     setProgressVariantId("");
+    setProgressDateTime(nowDateTimeLocal());
+    setProgressMetersInput("");
+    setProgressUnitCountInput("1");
+    setProgressNote("");
     setProgressError("");
   };
 
@@ -964,38 +1133,67 @@ export default function Dokuma() {
     if (!progressPlanId) return;
 
     try {
-      const meters = toPositiveNumber(progressMetersInput, "Metre");
       const selectedPlan = plans.find((plan) => plan.id === progressPlanId) ?? null;
-      if (hasPlanVariants(selectedPlan)) {
-        if (!progressVariantId) throw new Error("Varyant secimi gerekli.");
-        weavingLocalRepo.addVariantWovenMeters(
-          progressPlanId,
-          progressVariantId,
-          meters,
-          progressNote.trim() || undefined
-        );
-      } else {
-        const createdAt = toIsoFromDateTimeLocal(progressDateTime, "Tarih/Saat");
-        weavingLocalRepo.addProgress(
-          progressPlanId,
-          meters,
-          createdAt,
-          progressNote.trim() || undefined
-        );
+      if (!selectedPlan) throw new Error("Plan bulunamadi.");
+      const metersPerUnit = toPositiveNumber(progressMetersInput, "Metre");
+      const unitCount = toPositiveInt(progressUnitCountInput, "Adet");
+      const totalMeters = metersPerUnit * unitCount;
+      const createdAt = toIsoFromDateTimeLocal(progressDateTime, "Tarih/Saat");
+      const totals = resolvePlanTotals(selectedPlan, planTotalsById);
+
+      if (hasPlanVariants(selectedPlan) && !progressVariantId) {
+        throw new Error("Varyant secimi gerekli.");
       }
 
-      setProgressMetersInput("");
-      setProgressVariantId(
-        hasPlanVariants(selectedPlan)
-          ? selectedPlan.variants.find((variant) => variant.id === progressVariantId)?.id ??
-              selectedPlan.variants[0]?.id ??
-              ""
-          : ""
+      const persistProgress = () => {
+        try {
+          weavingLocalRepo.addProgress({
+            planId: progressPlanId,
+            variantId: hasPlanVariants(selectedPlan) ? progressVariantId : undefined,
+            createdAt,
+            meters: totalMeters,
+            metersPerUnit,
+            unitCount,
+            note: progressNote.trim() || undefined,
+          });
+
+          setProgressMetersInput("");
+          setProgressUnitCountInput("1");
+          setProgressVariantId(
+            hasPlanVariants(selectedPlan)
+              ? selectedPlan.variants.find((variant) => variant.id === progressVariantId)?.id ??
+                  selectedPlan.variants[0]?.id ??
+                  ""
+              : ""
+          );
+          setProgressDateTime(nowDateTimeLocal());
+          setProgressNote("");
+          setProgressError("");
+          refreshData();
+        } catch (error) {
+          setProgressError(error instanceof Error ? error.message : "Ilerleme kaydedilemedi.");
+        }
+      };
+
+      const warningMessages = getProgressWarningMessages(
+        selectedPlan,
+        totals,
+        progressVariantId,
+        totalMeters
       );
-      setProgressDateTime(nowDateTimeLocal());
-      setProgressNote("");
-      setProgressError("");
-      refreshData();
+
+      if (warningMessages.length > 0) {
+        setWarningConfirm({
+          title: "Ilerleme Uyarisi",
+          summary: "Bu giris plandaki metrelerle tam uyusmuyor.",
+          messages: warningMessages,
+          confirmLabel: "Devam Et",
+          onConfirm: persistProgress,
+        });
+        return;
+      }
+
+      persistProgress();
     } catch (error) {
       setProgressError(error instanceof Error ? error.message : "Ilerleme kaydedilemedi.");
     }
@@ -1121,27 +1319,46 @@ export default function Dokuma() {
         dyehouseNameSnapshot = dyehouse.name;
       }
 
-      weavingLocalRepo.addTransfer({
-        planId: transferPlanId,
-        meters,
-        variantLines,
-        createdAt,
-        destination: transferDestination,
-        dyehouseId,
-        dyehouseNameSnapshot,
-        note: transferNote.trim() || undefined,
-      });
+      const persistTransfer = () => {
+        try {
+          weavingLocalRepo.addTransfer({
+            planId: transferPlanId,
+            meters,
+            variantLines,
+            createdAt,
+            destination: transferDestination,
+            dyehouseId,
+            dyehouseNameSnapshot,
+            note: transferNote.trim() || undefined,
+          });
 
-      setTransferMetersInput("");
-      setTransferVariantMetersById(
-        hasPlanVariants(selectedPlan)
-          ? Object.fromEntries(selectedPlan.variants.map((variant) => [variant.id, ""]))
-          : {}
-      );
-      setTransferDateTime(nowDateTimeLocal());
-      setTransferNote("");
-      setTransferError("");
-      refreshData();
+          setTransferMetersInput("");
+          setTransferVariantMetersById(
+            hasPlanVariants(selectedPlan)
+              ? Object.fromEntries(selectedPlan.variants.map((variant) => [variant.id, ""]))
+              : {}
+          );
+          setTransferDateTime(nowDateTimeLocal());
+          setTransferNote("");
+          setTransferError("");
+          refreshData();
+        } catch (error) {
+          setTransferError(error instanceof Error ? error.message : "Sevk kaydedilemedi.");
+        }
+      };
+
+      if (transferWarning.trim()) {
+        setWarningConfirm({
+          title: "Sevk Uyarisi",
+          summary: "Sevk kaydi dokuma rakamlariyla tam uyusmuyor olabilir.",
+          messages: [transferWarning],
+          confirmLabel: "Devam Et",
+          onConfirm: persistTransfer,
+        });
+        return;
+      }
+
+      persistTransfer();
     } catch (error) {
       setTransferError(error instanceof Error ? error.message : "Sevk kaydedilemedi.");
     }
@@ -1156,8 +1373,29 @@ export default function Dokuma() {
   const handleToggleManualCompleted = (plan: WeavingPlan) => {
     if (!canAdvanceWeaving) return;
     const completed = !(plan.status === "COMPLETED" && plan.manualCompletedAt);
-    weavingLocalRepo.setManualCompleted(plan.id, completed);
-    refreshData();
+    const persistCompletion = () => {
+      weavingLocalRepo.setManualCompleted(plan.id, completed);
+      refreshData();
+    };
+
+    if (!completed) {
+      persistCompletion();
+      return;
+    }
+
+    const warnings = getCompletionWarningMessages(plan, resolvePlanTotals(plan, planTotalsById));
+    if (warnings.length > 0) {
+      setWarningConfirm({
+        title: "Tamamlama Uyarisi",
+        summary: "Plan kapanisi ile mevcut dokuma rakamlari arasinda fark var.",
+        messages: warnings,
+        confirmLabel: "Devam Et",
+        onConfirm: persistCompletion,
+      });
+      return;
+    }
+
+    persistCompletion();
   };
 
   const handleCancelPlan = (plan: WeavingPlan) => {
@@ -1165,6 +1403,16 @@ export default function Dokuma() {
     if (!window.confirm(`${plan.patternNoSnapshot} planini iptal etmek istiyor musunuz?`)) return;
     weavingLocalRepo.updatePlanStatus(plan.id, "CANCELLED");
     refreshData();
+  };
+
+  const closeWarningConfirm = () => {
+    setWarningConfirm(null);
+  };
+
+  const confirmWarningAction = () => {
+    const action = warningConfirm?.onConfirm;
+    setWarningConfirm(null);
+    action?.();
   };
 
   return (
@@ -1202,15 +1450,12 @@ export default function Dokuma() {
 
             <select
               value={statusFilter}
-              onChange={(event) =>
-                setStatusFilter(event.target.value as "ALL" | WeavingPlanStatus)
-              }
+              onChange={(event) => setStatusFilter(event.target.value as PlanListFilter)}
               className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
             >
-              <option value="ALL">Tumu</option>
-              {availableStatuses.map((status) => (
-                <option key={status} value={status}>
-                  {status}
+              {planListFilterOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>
@@ -1231,7 +1476,7 @@ export default function Dokuma() {
               type="button"
               onClick={() => {
                 setQuery("");
-                setStatusFilter("ALL");
+                setStatusFilter("OPEN");
                 setSortKey("created_desc");
               }}
               className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100"
@@ -1262,6 +1507,7 @@ export default function Dokuma() {
                   const isCancelled = plan.status === "CANCELLED";
                   const isManualCompleted =
                     plan.status === "COMPLETED" && Boolean(plan.manualCompletedAt);
+                  const planWarnings = getPlanWarningMessages(plan, totals);
 
                   return (
                     <tr key={plan.id} className="border-t border-black/5 align-top">
@@ -1274,6 +1520,23 @@ export default function Dokuma() {
                         </div>
                         {plan.note ? (
                           <div className="mt-1 text-xs text-neutral-500">Not: {plan.note}</div>
+                        ) : null}
+                        {planWarnings.length > 0 ? (
+                          <div className="mt-2 rounded-lg border border-rose-500/30 bg-rose-50 px-2.5 py-2 text-xs text-rose-800">
+                            <div className="flex items-start gap-2">
+                              <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-100 font-semibold text-rose-700">
+                                !
+                              </span>
+                              <div>
+                                <div>{planWarnings[0]}</div>
+                                {planWarnings.length > 1 ? (
+                                  <div className="mt-1 text-[11px] text-rose-700">
+                                    +{planWarnings.length - 1} ek uyari
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
                         ) : null}
                       </td>
                       <td className="px-3 py-2">{fmt(totals.plannedMeters)}</td>
@@ -1311,7 +1574,7 @@ export default function Dokuma() {
                                 : "border-rose-500/30 bg-rose-50 text-rose-700"
                           )}
                         >
-                          {plan.status}
+                          {planStatusLabels[plan.status]}
                         </span>
                       </td>
                       <td className="px-3 py-2">
@@ -1386,6 +1649,11 @@ export default function Dokuma() {
           onClick={closePlanModal}
         >
           <div
+            ref={planModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Dokuma Plani Olustur"
+            tabIndex={-1}
             className="max-h-[85vh] w-full max-w-2xl overflow-auto rounded-2xl bg-white p-6 shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
@@ -1462,7 +1730,7 @@ export default function Dokuma() {
                     />
                   </label>
                   <label className="space-y-1 text-sm text-neutral-700">
-                    <span>Tarak Eni (cm)</span>
+                    <span>Ham Kumas Eni (cm)</span>
                     <input
                       type="number"
                       min="0"
@@ -1849,48 +2117,64 @@ export default function Dokuma() {
               </div>
             </div>
             {selectedProgressVariants.length > 0 ? (
-              <>
-                <select
-                  value={progressVariantId}
-                  onChange={(event) => setProgressVariantId(event.target.value)}
-                  className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
-                >
-                  <option value="">Varyant secin</option>
-                  {selectedProgressVariants.map((variant) => (
-                    <option key={variant.id} value={variant.id}>
-                      {(variant.variantCode?.trim() || "-")} / {variant.colorName} / Plan: {fmt(variant.plannedMeters)} m / Dokunan: {fmt(variant.wovenMeters)} m
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={progressMetersInput}
-                  onChange={(event) => setProgressMetersInput(event.target.value)}
-                  placeholder="Metre"
-                  className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
-                />
-              </>
-            ) : (
-              <div className="grid gap-2 sm:grid-cols-2">
+              <select
+                value={progressVariantId}
+                onChange={(event) => setProgressVariantId(event.target.value)}
+                className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+              >
+                <option value="">Varyant secin</option>
+                {selectedProgressVariants.map((variant) => (
+                  <option key={variant.id} value={variant.id}>
+                    {(variant.variantCode?.trim() || "-")} / {variant.colorName} / Plan: {fmt(variant.plannedMeters)} m / Dokunan: {fmt(variant.wovenMeters)} m
+                  </option>
+                ))}
+              </select>
+            ) : null}
+
+            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_150px_110px_160px]">
+              <label className="space-y-1 text-sm text-neutral-700">
+                <span>Tarih / Saat</span>
                 <input
                   type="datetime-local"
                   value={progressDateTime}
                   onChange={(event) => setProgressDateTime(event.target.value)}
                   className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
                 />
+              </label>
+
+              <label className="space-y-1 text-sm text-neutral-700">
+                <span>Metre</span>
                 <input
                   type="number"
                   min="0"
                   step="0.01"
                   value={progressMetersInput}
                   onChange={(event) => setProgressMetersInput(event.target.value)}
-                  placeholder="Metre"
+                  placeholder="0"
                   className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
                 />
+              </label>
+
+              <label className="space-y-1 text-sm text-neutral-700">
+                <span>Adet</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={progressUnitCountInput}
+                  onChange={(event) => setProgressUnitCountInput(event.target.value)}
+                  placeholder="1"
+                  className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                />
+              </label>
+
+              <div className="space-y-1 text-sm text-neutral-700">
+                <span className="block">Toplam Ilerleme</span>
+                <div className="rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-sm font-semibold text-neutral-900">
+                  {fmt(progressCalculatedTotal)} m
+                </div>
               </div>
-            )}
+            </div>
             <input
               type="text"
               value={progressNote}
@@ -1901,18 +2185,54 @@ export default function Dokuma() {
 
             {selectedProgressVariants.length > 0 ? (
               <p className="rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
-                Varyantli planlarda ilerleme secili varyantin dokunan metresine eklenir.
+                Varyantli planlarda toplam ilerleme, secili varyanta metre x adet formulu ile eklenir.
               </p>
-            ) : (
-              <div className="rounded-lg border border-black/10 bg-white p-2">
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
-                  Son 5 Ilerleme
+            ) : null}
+
+            {progressWarnings.length > 0 ? (
+              <div className="rounded-lg border border-rose-500/30 bg-rose-50 px-3 py-3 text-sm text-rose-800">
+                <div className="flex items-start gap-2">
+                  <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-100 font-semibold text-rose-700">
+                    !
+                  </span>
+                  <div className="space-y-1">
+                    <div className="font-medium">Plan uyariyor; isterseniz yine kaydedebilirsiniz.</div>
+                    {progressWarnings.map((warning) => (
+                      <div key={warning} className="text-xs text-rose-700">
+                        {warning}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="space-y-1 text-xs text-neutral-700">
-                  {recentProgressForModal.map((entry) => (
+              </div>
+            ) : null}
+
+            <div className="rounded-lg border border-black/10 bg-white p-2">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                Son 5 Ilerleme
+              </div>
+              <div className="space-y-1 text-xs text-neutral-700">
+                {recentProgressForModal.map((entry) => {
+                  const variantText = [entry.variantCodeSnapshot?.trim(), entry.colorNameSnapshot?.trim()]
+                    .filter(Boolean)
+                    .join(" / ");
+                  const amountText =
+                    typeof entry.metersPerUnit === "number" &&
+                    Number.isFinite(entry.metersPerUnit) &&
+                    typeof entry.unitCount === "number" &&
+                    Number.isFinite(entry.unitCount)
+                      ? entry.unitCount > 1
+                        ? `${fmt(entry.metersPerUnit)} m x ${entry.unitCount} = ${fmt(entry.meters)} m`
+                        : `${fmt(entry.meters)} m`
+                      : `${fmt(entry.meters)} m`;
+
+                  return (
                     <div key={entry.id} className="flex items-center justify-between gap-2">
                       <span>
-                        {formatDateTime(entry.createdAt)} - {fmt(entry.meters)} m
+                        {formatDateTime(entry.createdAt)}
+                        {" - "}
+                        {variantText ? `${variantText} / ` : ""}
+                        {amountText}
                         {entry.note ? ` (${entry.note})` : ""}
                       </span>
                       {canEditWeaving ? (
@@ -1925,11 +2245,11 @@ export default function Dokuma() {
                         </button>
                       ) : null}
                     </div>
-                  ))}
-                  {recentProgressForModal.length === 0 ? <div>Kayit yok.</div> : null}
-                </div>
+                  );
+                })}
+                {recentProgressForModal.length === 0 ? <div>Kayit yok.</div> : null}
               </div>
-            )}
+            </div>
           </div>
           {progressError ? <p className="mt-3 text-sm text-rose-600">{progressError}</p> : null}
           <div className="mt-4 flex justify-end gap-2">
@@ -2134,9 +2454,17 @@ export default function Dokuma() {
             />
 
             {transferWarning ? (
-              <p className="rounded-lg border border-rose-500/30 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
-                {transferWarning}
-              </p>
+              <div className="rounded-lg border border-rose-500/30 bg-rose-50 px-3 py-3 text-sm text-rose-800">
+                <div className="flex items-start gap-2">
+                  <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-100 font-semibold text-rose-700">
+                    !
+                  </span>
+                  <div>
+                    <div className="font-medium">Sevk uyarisi</div>
+                    <div className="mt-1 text-xs text-rose-700">{transferWarning}</div>
+                  </div>
+                </div>
+              </div>
             ) : null}
 
             <div className="rounded-lg border border-black/10 bg-white p-2">
@@ -2192,6 +2520,45 @@ export default function Dokuma() {
                 Kaydet
               </button>
             ) : null}
+          </div>
+        </Modal>
+      ) : null}
+
+      {warningConfirm ? (
+        <Modal title={warningConfirm.title} onClose={closeWarningConfirm}>
+          <div className="space-y-3">
+            <div className="rounded-lg border border-rose-500/30 bg-rose-50 px-3 py-3 text-sm text-rose-800">
+              <div className="flex items-start gap-2">
+                <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-100 font-semibold text-rose-700">
+                  !
+                </span>
+                <div className="space-y-1">
+                  <div className="font-medium">{warningConfirm.summary}</div>
+                  {warningConfirm.messages.map((message) => (
+                    <div key={message} className="text-xs text-rose-700">
+                      {message}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeWarningConfirm}
+                className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100"
+              >
+                Vazgec
+              </button>
+              <button
+                type="button"
+                onClick={confirmWarningAction}
+                className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
+              >
+                {warningConfirm.confirmLabel}
+              </button>
+            </div>
           </div>
         </Modal>
       ) : null}
@@ -2325,6 +2692,7 @@ function WeavingDetailContent({
   const [fabricSaveSuccess, setFabricSaveSuccess] = useState("");
   const digitalInputRef = useRef<HTMLInputElement | null>(null);
   const finalInputRef = useRef<HTMLInputElement | null>(null);
+  const variantEditorBodyRef = useRef<HTMLDivElement | null>(null);
   const [variantEditorOpen, setVariantEditorOpen] = useState(false);
   const [variantError, setVariantError] = useState("");
   const [variantRows, setVariantRows] = useState<
@@ -2387,7 +2755,7 @@ function WeavingDetailContent({
     setIsEditingFabric(false);
     setFabricSaveError("");
     setFabricSaveSuccess("");
-  }, [pattern?.id]);
+  }, [pattern]);
 
   useEffect(() => {
     if (!fabricSaveSuccess) return;
@@ -2494,14 +2862,29 @@ function WeavingDetailContent({
     try {
       const totalEndsInput = fabricDraft.toplamTel.trim().replace(",", ".");
       const tarakEniInput = fabricDraft.tarakEniCm.trim().replace(",", ".");
+      const cozguGrInput = fabricDraft.cozguGr.trim().replace(",", ".");
+      const atkiGrInput = fabricDraft.atkiGr.trim().replace(",", ".");
+      const mtTulInput = fabricDraft.mtTul.trim().replace(",", ".");
       const totalEndsParsed = totalEndsInput ? Number(totalEndsInput) : null;
       const tarakEniParsed = tarakEniInput ? Number(tarakEniInput) : null;
+      const cozguGrParsed = cozguGrInput ? Number(cozguGrInput) : null;
+      const atkiGrParsed = atkiGrInput ? Number(atkiGrInput) : null;
+      const mtTulParsed = mtTulInput ? Number(mtTulInput) : null;
 
       if (totalEndsParsed !== null && (!Number.isFinite(totalEndsParsed) || totalEndsParsed < 0)) {
         throw new Error("Toplam Tel negatif olamaz.");
       }
       if (tarakEniParsed !== null && (!Number.isFinite(tarakEniParsed) || tarakEniParsed < 0)) {
         throw new Error("Tarak Eni (cm) negatif olamaz.");
+      }
+      if (cozguGrParsed !== null && (!Number.isFinite(cozguGrParsed) || cozguGrParsed < 0)) {
+        throw new Error("Cozgu Gr negatif olamaz.");
+      }
+      if (atkiGrParsed !== null && (!Number.isFinite(atkiGrParsed) || atkiGrParsed < 0)) {
+        throw new Error("Atki Gr negatif olamaz.");
+      }
+      if (mtTulParsed !== null && (!Number.isFinite(mtTulParsed) || mtTulParsed < 0)) {
+        throw new Error("Mt Tul negatif olamaz.");
       }
       const warpCountNormalized = normalizeCountAndYarn(
         fabricDraft.cozguSayi,
@@ -2521,7 +2904,12 @@ function WeavingDetailContent({
           totalEndsParsed === null
             ? "-"
             : String(Math.max(0, Math.round(totalEndsParsed))),
+        tarakNo: fabricDraft.tarakNo.trim() || undefined,
         tarakEniCm: tarakEniParsed === null ? null : Math.max(0, tarakEniParsed),
+        cozguGr: cozguGrParsed === null ? null : Math.max(0, cozguGrParsed),
+        atkiGr: atkiGrParsed === null ? null : Math.max(0, atkiGrParsed),
+        mtTul: mtTulParsed === null ? null : Math.max(0, mtTulParsed),
+        opsiyonelNot: fabricDraft.opsiyonelNot.trim() || undefined,
       };
 
       const updated = patternsLocalRepo.update(pattern.id, nextPatch);
@@ -2599,6 +2987,12 @@ function WeavingDetailContent({
         notes: "",
       },
     ]);
+    requestAnimationFrame(() => {
+      variantEditorBodyRef.current?.scrollTo({
+        top: variantEditorBodyRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    });
   };
 
   const removeVariantRow = (id: string) => {
@@ -2688,12 +3082,26 @@ function WeavingDetailContent({
               <div>Depo: {fmt(totals.sentToWarehouse)} m</div>
               <div>Dokumada Bekleyen: {fmt(totals.pendingToSend)} m</div>
               <div>Kalan: {fmt(totals.remainingPlanned)} m</div>
-              <div>Durum: {plan.status}</div>
-              {typeof plan.tarakEniCm === "number" && Number.isFinite(plan.tarakEniCm) ? (
-                <div>Tarak Eni: {fmt(plan.tarakEniCm)} cm</div>
+              <div>Durum: {planStatusLabels[plan.status]}</div>
+              {typeof plan.hamKumasEniCm === "number" && Number.isFinite(plan.hamKumasEniCm) ? (
+                <div>Ham Kumas Eni: {fmt(plan.hamKumasEniCm)} cm</div>
               ) : null}
               <div>Olusturma: {formatDateTime(plan.createdAt)}</div>
               {plan.note ? <div>Plan Notu: {plan.note}</div> : null}
+              {getPlanWarningMessages(plan, totals).length > 0 ? (
+                <div className="mt-2 rounded-lg border border-rose-500/30 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                  <div className="flex items-start gap-2">
+                    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-100 font-semibold text-rose-700">
+                      !
+                    </span>
+                    <div className="space-y-1">
+                      {getPlanWarningMessages(plan, totals).map((warning) => (
+                        <div key={warning}>{warning}</div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="space-y-2 rounded-xl border border-black/10 bg-white p-3 text-sm text-neutral-700">
@@ -2813,6 +3221,16 @@ function WeavingDetailContent({
                     </label>
 
                     <label className="space-y-1 text-xs text-neutral-700">
+                      <span>Tarak No</span>
+                      <input
+                        type="text"
+                        value={fabricDraft.tarakNo}
+                        onChange={(event) => handleFabricDraftChange("tarakNo", event.target.value)}
+                        className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                      />
+                    </label>
+
+                    <label className="space-y-1 text-xs text-neutral-700">
                       <span>Tarak Eni (cm)</span>
                       <input
                         type="number"
@@ -2825,7 +3243,55 @@ function WeavingDetailContent({
                         className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
                       />
                     </label>
+
+                    <label className="space-y-1 text-xs text-neutral-700">
+                      <span>Cozgu Gr</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={fabricDraft.cozguGr}
+                        onChange={(event) => handleFabricDraftChange("cozguGr", event.target.value)}
+                        className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                      />
+                    </label>
+
+                    <label className="space-y-1 text-xs text-neutral-700">
+                      <span>Atki Gr</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={fabricDraft.atkiGr}
+                        onChange={(event) => handleFabricDraftChange("atkiGr", event.target.value)}
+                        className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                      />
+                    </label>
+
+                    <label className="space-y-1 text-xs text-neutral-700">
+                      <span>Mt Tul</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={fabricDraft.mtTul}
+                        onChange={(event) => handleFabricDraftChange("mtTul", event.target.value)}
+                        className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                      />
+                    </label>
                   </div>
+
+                  <label className="space-y-1 text-xs text-neutral-700">
+                    <span>Opsiyonel Not</span>
+                    <textarea
+                      value={fabricDraft.opsiyonelNot}
+                      onChange={(event) =>
+                        handleFabricDraftChange("opsiyonelNot", event.target.value)
+                      }
+                      rows={3}
+                      className="w-full resize-none rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                    />
+                  </label>
                   <p className="text-xs text-neutral-500">
                     Bu degisiklik desen kartini gunceller.
                   </p>
@@ -2885,15 +3351,25 @@ function WeavingDetailContent({
                     </tr>
                   </thead>
                   <tbody>
-                    {planVariants.map((variant) => (
-                      <tr key={variant.id} className="border-t border-black/5">
-                        <td className="px-2.5 py-2">{variant.variantCode?.trim() || "-"}</td>
-                        <td className="px-2.5 py-2">{variant.colorName}</td>
-                        <td className="px-2.5 py-2">{fmt(variant.plannedMeters)}</td>
-                        <td className="px-2.5 py-2">{fmt(variant.wovenMeters)}</td>
-                        <td className="px-2.5 py-2">{fmt(variant.plannedMeters - variant.wovenMeters)}</td>
-                      </tr>
-                    ))}
+                    {planVariants.map((variant) => {
+                      const isOverWoven = variant.wovenMeters - variant.plannedMeters > EPSILON;
+                      return (
+                        <tr key={variant.id} className="border-t border-black/5">
+                          <td className="px-2.5 py-2">{variant.variantCode?.trim() || "-"}</td>
+                          <td className="px-2.5 py-2">{variant.colorName}</td>
+                          <td className="px-2.5 py-2">{fmt(variant.plannedMeters)}</td>
+                          <td className={cn("px-2.5 py-2", isOverWoven ? "font-semibold text-rose-700" : "")}>
+                            {fmt(variant.wovenMeters)}
+                            {isOverWoven ? (
+                              <div className="text-[11px] text-rose-700">Plan asildi</div>
+                            ) : null}
+                          </td>
+                          <td className={cn("px-2.5 py-2", isOverWoven ? "font-semibold text-rose-700" : "")}>
+                            {fmt(variant.plannedMeters - variant.wovenMeters)}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -2984,9 +3460,12 @@ function WeavingDetailContent({
       )}
 
       {variantEditorOpen ? (
-        <Modal title="Varyantlari Duzenle" onClose={closeVariantEditor} size="lg">
-          <div className="space-y-3">
-            <div className="max-h-[55vh] overflow-auto rounded-lg border border-black/10">
+        <Modal title="Varyantlari Duzenle" onClose={closeVariantEditor} size="xl">
+          <div className="flex max-h-[72vh] min-h-0 flex-col gap-3">
+            <div
+              ref={variantEditorBodyRef}
+              className="min-h-0 flex-1 overflow-auto rounded-lg border border-black/10"
+            >
               <table className="w-full text-left text-sm">
                 <thead className="sticky top-0 bg-neutral-50 text-neutral-600">
                   <tr>
@@ -3055,16 +3534,19 @@ function WeavingDetailContent({
               </table>
             </div>
 
-            <div className="flex justify-between gap-2">
-              {canEditVariants ? (
-                <button
-                  type="button"
-                  onClick={addVariantRow}
-                  className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
-                >
-                  + Satir Ekle
-                </button>
-              ) : null}
+            <div className="flex shrink-0 justify-between gap-2 rounded-lg border border-black/10 bg-white p-2">
+              <div className="flex items-center gap-2">
+                {canEditVariants ? (
+                  <button
+                    type="button"
+                    onClick={addVariantRow}
+                    className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                  >
+                    + Satir Ekle
+                  </button>
+                ) : null}
+                <span className="text-xs text-neutral-500">Seri giris icin satir alani kendi icinde kayar.</span>
+              </div>
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -3101,8 +3583,11 @@ type ModalProps = {
 };
 
 function Modal({ title, children, onClose, size = "md" }: ModalProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const widthClass =
     size === "xl" ? "max-w-3xl" : size === "lg" ? "max-w-xl" : "max-w-md";
+
+  useModalFocusTrap({ containerRef: dialogRef });
 
   return (
     <div
@@ -3110,14 +3595,21 @@ function Modal({ title, children, onClose, size = "md" }: ModalProps) {
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
         className={cn(
-          "w-full rounded-2xl border border-black/10 bg-white p-5 shadow-2xl",
+          "max-h-[88vh] w-full overflow-hidden rounded-2xl border border-black/10 bg-white shadow-2xl",
           widthClass
         )}
         onClick={(event) => event.stopPropagation()}
       >
-        <h3 className="text-lg font-semibold text-neutral-900">{title}</h3>
-        <div className="mt-2">{children}</div>
+        <div className="max-h-[88vh] overflow-auto p-5">
+          <h3 className="text-lg font-semibold text-neutral-900">{title}</h3>
+          <div className="mt-2">{children}</div>
+        </div>
       </div>
     </div>
   );

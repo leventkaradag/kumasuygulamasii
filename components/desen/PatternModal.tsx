@@ -1,10 +1,11 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAuthProfile } from "@/components/AuthProfileProvider";
 import type { Stage } from "@/lib/domain/movement";
 import type { Pattern } from "@/lib/domain/pattern";
+import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 import {
   patternsLocalRepo,
   type PatternMetersTarget,
@@ -96,6 +97,7 @@ export function PatternModal({ pattern, onClose, onSave }: Props) {
   const [metersToAdd, setMetersToAdd] = useState<string>("");
   const [metersTarget, setMetersTarget] = useState<PatternMetersTarget>("AUTO");
   const [error, setError] = useState("");
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const canSavePattern = pattern.id ? permissions.patterns.edit : permissions.patterns.create;
 
   useEffect(() => {
@@ -127,6 +129,8 @@ export function PatternModal({ pattern, onClose, onSave }: Props) {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [mounted, onClose]);
+
+  useModalFocusTrap({ enabled: mounted, containerRef: dialogRef });
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -183,6 +187,11 @@ export function PatternModal({ pattern, onClose, onSave }: Props) {
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Desen Bilgilerini Guncelle"
+        tabIndex={-1}
         className="w-full max-w-2xl max-h-[85vh] overflow-auto rounded-2xl bg-white p-6 shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >

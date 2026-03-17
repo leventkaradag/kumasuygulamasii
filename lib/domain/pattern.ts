@@ -32,6 +32,11 @@ export type Pattern = {
   kg?: number;
   eniCm?: number;
   tarakEniCm?: number | null;
+  tarakNo?: string;
+  cozguGr?: number | null;
+  atkiGr?: number | null;
+  mtTul?: number | null;
+  opsiyonelNot?: string;
   reedWidthCm?: number;
   color?: string;
   currentStage: Stage;

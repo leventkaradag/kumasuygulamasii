@@ -1,7 +1,16 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
-import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { ExternalLink, Plus, Search } from "lucide-react";
 import { useAuthProfile } from "@/components/AuthProfileProvider";
 import Layout from "@/components/Layout";
@@ -10,15 +19,19 @@ import type { FabricRoll, FabricRollStatus } from "@/lib/domain/depo";
 import type { Customer } from "@/lib/domain/customer";
 import type { DepoTransaction, DepoTransactionLine, DepoTransactionType } from "@/lib/domain/depoTransaction";
 import type { Pattern, Variant } from "@/lib/domain/pattern";
+import type { WeavingPlan, WeavingProgressEntry } from "@/lib/domain/weaving";
 import { downloadDepoDailyEntryReportXlsx } from "@/lib/export/depoDailyEntryExcel";
+import { buildPatternNoteHistory, type PatternNoteEntry } from "@/lib/patternNoteHistory";
 import { customersLocalRepo, normalizeCustomerName } from "@/lib/repos/customersLocalRepo";
 import { depoLocalRepo } from "@/lib/repos/depoLocalRepo";
 import { depoTransactionsLocalRepo } from "@/lib/repos/depoTransactionsLocalRepo";
 import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
+import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
 import { buildDepoDailyEntryReport } from "@/lib/summary/depoDailyEntryReport";
+import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 
 type PatternMeta = Pattern & Partial<{ __deleted?: boolean }>;
-type DepoTab = "stock" | "tx";
+type DepoTab = "stock" | "tx" | "notes";
 type BulkActionType = "SHIPMENT" | "RESERVATION";
 type ColorSummary = {
   color: string;
@@ -204,6 +217,8 @@ const formatDateTime = (value: string) => {
   });
 };
 
+const formatShortRef = (value: string) => value.slice(0, 8).toUpperCase();
+
 const isPatternVisible = (pattern: Pattern) => {
   const meta = pattern as PatternMeta;
   return pattern.archived !== true && meta.__deleted !== true;
@@ -220,6 +235,65 @@ const shortNote = (value?: string) => {
 };
 
 const variantName = (variant: Variant) => variant.colorName?.trim() || variant.name?.trim() || "Renk yok";
+
+const formatPatternNoteTitle = (entry: PatternNoteEntry) => {
+  if (entry.sourceType !== "DEPO") return entry.operationLabel;
+  const isBulk = (entry.lineCount ?? 0) > 1 || (entry.topCount ?? 0) > 1;
+  if (!isBulk) return entry.operationLabel;
+
+  if (entry.operationLabel === "Top Girisi") return "Toplu Top Girisi";
+  if (entry.operationLabel === "Sevk") return "Toplu Sevk";
+  if (entry.operationLabel === "Rezerv") return "Toplu Rezerv";
+  return entry.operationLabel;
+};
+
+const formatPatternNoteActionSummary = (entry: PatternNoteEntry) => {
+  if (
+    entry.sourceType === "DEPO" &&
+    typeof entry.topCount === "number" &&
+    Number.isFinite(entry.topCount) &&
+    entry.topCount > 0
+  ) {
+    if (entry.operationLabel === "Sevk") return `${entry.topCount} top gonderildi`;
+    if (entry.operationLabel === "Rezerv") return `${entry.topCount} top rezerve edildi`;
+    if (entry.operationLabel === "Top Girisi") return `${entry.topCount} top girildi`;
+  }
+
+  if (
+    typeof entry.metersPerUnit === "number" &&
+    Number.isFinite(entry.metersPerUnit) &&
+    typeof entry.unitCount === "number" &&
+    Number.isFinite(entry.unitCount)
+  ) {
+    const totalMeters = entry.meters ?? entry.metersPerUnit * entry.unitCount;
+    return entry.unitCount > 1
+      ? `${fmt(entry.metersPerUnit)} m x ${entry.unitCount} adet = ${fmt(totalMeters)} m`
+      : `${fmt(totalMeters)} m ilerleme kaydedildi`;
+  }
+
+  if (typeof entry.meters === "number" && Number.isFinite(entry.meters)) {
+    return `${fmt(entry.meters)} m ilerleme kaydedildi`;
+  }
+
+  return null;
+};
+
+const formatPatternNoteVariant = (entry: PatternNoteEntry) => {
+  const scopeSummary = entry.scopeSummary?.trim();
+  if (scopeSummary) return scopeSummary;
+  const parts = [entry.variantCode?.trim(), entry.colorName?.trim()].filter(Boolean);
+  return parts.length > 0 ? parts.join(" / ") : null;
+};
+
+const formatPatternNoteTopCount = (entry: PatternNoteEntry) =>
+  typeof entry.topCount === "number" && Number.isFinite(entry.topCount) && entry.topCount > 0
+    ? `${entry.topCount} top`
+    : null;
+
+const formatPatternNoteMeters = (entry: PatternNoteEntry) =>
+  typeof entry.meters === "number" && Number.isFinite(entry.meters)
+    ? `Toplam ${fmt(entry.meters)} m`
+    : null;
 
 const rollColor = (roll: FabricRoll, pattern: Pattern) => {
   if (roll.variantId) {
@@ -414,6 +488,8 @@ export default function DepoPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [transactions, setTransactions] = useState<DepoTransaction[]>([]);
   const [transactionLines, setTransactionLines] = useState<DepoTransactionLine[]>([]);
+  const [weavingPlans, setWeavingPlans] = useState<WeavingPlan[]>([]);
+  const [weavingProgressEntries, setWeavingProgressEntries] = useState<WeavingProgressEntry[]>([]);
   const [selectedPatternId, setSelectedPatternId] = useState<string | null>(null);
   const [searchPattern, setSearchPattern] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -485,11 +561,15 @@ export default function DepoPage() {
     const nextCustomers = customersLocalRepo.list();
     const nextTransactions = depoTransactionsLocalRepo.listTransactions();
     const nextTransactionLines = depoTransactionsLocalRepo.listLines();
+    const nextWeavingPlans = weavingLocalRepo.listPlans();
+    const nextWeavingProgressEntries = weavingLocalRepo.listProgress();
     setPatterns(nextPatterns);
     setRolls(nextRolls);
     setCustomers(nextCustomers);
     setTransactions(nextTransactions);
     setTransactionLines(nextTransactionLines);
+    setWeavingPlans(nextWeavingPlans);
+    setWeavingProgressEntries(nextWeavingProgressEntries);
     setSelectedPatternId((currentId) => {
       if (preferredPatternId && nextPatterns.some((p) => p.id === preferredPatternId)) return preferredPatternId;
       if (currentId && nextPatterns.some((p) => p.id === currentId)) return currentId;
@@ -517,7 +597,7 @@ export default function DepoPage() {
 
   const filteredPatterns = useMemo(() => {
     const normalized = normalizeSearchToken(searchPattern);
-    const hasDateFilter = !!dateFrom || !!dateTo;
+    const hasDateFilter = activeTab === "stock" && (!!dateFrom || !!dateTo);
     const patternIds = new Set(rollsInRange.map((roll) => roll.patternId));
     return patterns.filter((pattern) => {
       if (hasDateFilter && !patternIds.has(pattern.id)) return false;
@@ -527,7 +607,7 @@ export default function DepoPage() {
         normalizeSearchToken(pattern.fabricName).includes(normalized)
       );
     });
-  }, [patterns, rollsInRange, searchPattern, dateFrom, dateTo]);
+  }, [patterns, rollsInRange, searchPattern, dateFrom, dateTo, activeTab]);
 
   useEffect(() => {
     if (selectedPatternId && filteredPatterns.some((item) => item.id === selectedPatternId)) return;
@@ -536,6 +616,24 @@ export default function DepoPage() {
 
   const patternsById = useMemo(() => new Map(patterns.map((pattern) => [pattern.id, pattern])), [patterns]);
   const selectedPattern = filteredPatterns.find((item) => item.id === selectedPatternId) ?? null;
+  const selectedPatternNotes = useMemo(() => {
+    if (!selectedPattern) return [];
+    return buildPatternNoteHistory({
+      patternId: selectedPattern.id,
+      transactions,
+      transactionLines,
+      weavingPlans,
+      weavingProgressEntries,
+      patterns,
+    });
+  }, [
+    selectedPattern,
+    transactions,
+    transactionLines,
+    weavingPlans,
+    weavingProgressEntries,
+    patterns,
+  ]);
 
   const selectedPatternRolls = useMemo(() => {
     if (!selectedPattern) return [];
@@ -1283,6 +1381,16 @@ export default function DepoPage() {
     );
   }, [detailRow]);
 
+  const detailColorSummary = useMemo(() => {
+    if (!detailRow) return null;
+    const uniqueColors = Array.from(
+      new Set(detailRow.lines.map((line) => line.color.trim()).filter(Boolean))
+    );
+    if (uniqueColors.length === 0) return null;
+    if (uniqueColors.length <= 3) return uniqueColors.join(", ");
+    return `${uniqueColors[0]}, ${uniqueColors[1]}, ${uniqueColors[2]} +${uniqueColors.length - 3} renk`;
+  }, [detailRow]);
+
   const handleReverseTransaction = () => {
     if (!canReverseTransactions) return;
     if (!detailRow) return;
@@ -1525,9 +1633,21 @@ export default function DepoPage() {
           >
             Hareket
           </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("notes")}
+            className={cn(
+              "rounded-lg px-3 py-1.5 text-sm font-semibold transition",
+              activeTab === "notes"
+                ? "bg-coffee-primary/10 text-coffee-primary"
+                : "text-neutral-700 hover:bg-neutral-100"
+            )}
+          >
+            Notlar
+          </button>
         </div>
 
-        {activeTab === "stock" ? (
+        {activeTab !== "tx" ? (
         <div className="grid min-h-0 h-[calc(100vh-320px)] gap-4 lg:grid-cols-[340px,1fr]">
           <aside className="min-h-0 overflow-auto rounded-2xl border border-black/5 bg-white/80 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
             <div className="space-y-3">
@@ -1545,7 +1665,18 @@ export default function DepoPage() {
                   <button key={pattern.id} type="button" onClick={() => setSelectedPatternId(pattern.id)} className={cn("w-full rounded-xl border p-3 text-left transition", pattern.id === selectedPatternId ? "border-coffee-primary bg-coffee-primary/10" : "border-black/10 bg-white hover:border-coffee-primary/40")}>
                     <div className="flex gap-3">
                       <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-black/10 bg-coffee-surface">
-                        {getPatternImage(pattern) ? <img src={getPatternImage(pattern)} alt={pattern.fabricName} className="h-14 w-14 object-cover" loading="lazy" /> : <span className="text-xs font-semibold text-neutral-500">Foto</span>}
+                        {getPatternImage(pattern) ? (
+                          <Image
+                            src={getPatternImage(pattern)!}
+                            alt={pattern.fabricName}
+                            width={56}
+                            height={56}
+                            unoptimized
+                            className="h-14 w-14 object-cover"
+                          />
+                        ) : (
+                          <span className="text-xs font-semibold text-neutral-500">Foto</span>
+                        )}
                       </div>
                       <div className="min-w-0">
                         <div className="truncate text-sm font-semibold text-neutral-900">{pattern.fabricCode} - {pattern.fabricName}</div>
@@ -1563,6 +1694,7 @@ export default function DepoPage() {
             {!selectedPattern ? (
               <div className="flex h-full min-h-[260px] items-center justify-center rounded-xl border border-dashed border-black/10 bg-coffee-surface text-sm text-neutral-500">Sol panelden desen seciniz.</div>
             ) : (
+              activeTab === "stock" ? (
               <div className="space-y-4">
                 <div className="rounded-xl border border-black/10 bg-white p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1828,6 +1960,117 @@ export default function DepoPage() {
                   </div>
                 </div>
               </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-black/10 bg-white p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xs uppercase tracking-wide text-neutral-500">Secili Desen</div>
+                        <h2 className="text-xl font-semibold text-neutral-900">{selectedPattern.fabricCode} - {selectedPattern.fabricName}</h2>
+                        <p className="mt-2 text-sm text-neutral-600">
+                          Depo ve dokuma kaynakli islem notlari ayni desen gecmisinde listelenir.
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-black/10 bg-neutral-50 px-4 py-3 text-right">
+                        <div className="text-xs uppercase tracking-wide text-neutral-500">Not Kaydi</div>
+                        <div className="mt-1 text-2xl font-semibold text-neutral-900">{selectedPatternNotes.length}</div>
+                        <div className="text-xs text-neutral-600">desen bazli gecmis</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-black/10 bg-white p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-sm font-semibold text-neutral-900">Desen Not Gecmisi</h3>
+                      <span className="rounded-full border border-black/10 bg-neutral-50 px-2.5 py-1 text-xs font-semibold text-neutral-700">
+                        {selectedPatternNotes.length} kayit
+                      </span>
+                    </div>
+
+                    <div className="mt-3 space-y-3">
+                      {selectedPatternNotes.map((entry) => {
+                        const title = formatPatternNoteTitle(entry);
+                        const actionSummary = formatPatternNoteActionSummary(entry);
+                        const variantText = formatPatternNoteVariant(entry);
+                        const topCountText = formatPatternNoteTopCount(entry);
+                        const metersText = formatPatternNoteMeters(entry);
+
+                        return (
+                          <div key={entry.id} className="rounded-xl border border-black/10 bg-neutral-50 px-4 py-3">
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="inline-flex rounded-full border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-800">
+                                  {entry.operationLabel}
+                                </span>
+                                <span className="text-xs text-neutral-500">{formatDateTime(entry.createdAt)}</span>
+                              </div>
+                              <span
+                                className={cn(
+                                  "inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+                                  entry.sourceType === "DOKUMA"
+                                    ? "border-amber-500/30 bg-amber-50 text-amber-700"
+                                    : "border-sky-500/30 bg-sky-50 text-sky-700"
+                                )}
+                              >
+                                {entry.sourceType === "DOKUMA" ? "Dokuma" : "Depo"}
+                              </span>
+                            </div>
+
+                            <div className="mt-3">
+                              <h4 className="text-base font-semibold text-neutral-900">{title}</h4>
+                              {actionSummary ? (
+                                <p className="mt-1 text-xs font-medium text-neutral-600">{actionSummary}</p>
+                              ) : null}
+                            </div>
+
+                            <p className="mt-3 text-sm text-neutral-900">{entry.note}</p>
+
+                            {variantText || topCountText || metersText ? (
+                              <div className="mt-3 flex flex-wrap gap-2 text-xs text-neutral-600">
+                                {variantText ? (
+                                  <span className="rounded-full border border-black/10 bg-white px-2.5 py-1">
+                                    {entry.sourceType === "DOKUMA"
+                                      ? `Renk / Varyant: ${variantText}`
+                                      : `Renk Ozeti: ${variantText}`}
+                                  </span>
+                                ) : null}
+                                {topCountText ? (
+                                  <span className="rounded-full border border-black/10 bg-white px-2.5 py-1">
+                                    {topCountText}
+                                  </span>
+                                ) : null}
+                                {metersText ? (
+                                  <span className="rounded-full border border-black/10 bg-white px-2.5 py-1">
+                                    {metersText}
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : null}
+
+                            {entry.sourceType === "DEPO" && entry.transactionId ? (
+                              <div className="mt-3 flex justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => setDetailTransactionId(entry.transactionId ?? null)}
+                                  className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                                >
+                                  Detayi Gor
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+
+                      {selectedPatternNotes.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-black/10 bg-neutral-50 px-4 py-10 text-center text-sm text-neutral-500">
+                          Bu desen icin kayitli islem notu bulunmuyor.
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              )
             )}
           </section>
         </div>
@@ -1928,19 +2171,9 @@ export default function DepoPage() {
             <select value={addVariantId} onChange={(e) => setAddVariantId(e.target.value)} className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary">{selectedPattern.variants.map((variant) => <option key={variant.id} value={variant.id}>{variantName(variant)}</option>)}<option value="__other">Diger (serbest renk)</option></select>
             {addVariantId === "__other" ? <input type="text" value={addColorName} onChange={(e) => setAddColorName(e.target.value)} placeholder="Renk adi" className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" /> : null}
             <div className="rounded-xl border border-black/10 bg-neutral-50 p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Top Satirlari</div>
-                  <p className="text-xs text-neutral-500">Her satir adet kadar ayri top olarak kaydolur.</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={appendAddRow}
-                  className="inline-flex items-center gap-1 rounded-lg border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Satir Ekle
-                </button>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Top Satirlari</div>
+                <p className="text-xs text-neutral-500">Her satir adet kadar ayri top olarak kaydolur.</p>
               </div>
               <div className="mt-3 space-y-2">
                 {addRows.map((row, index) => (
@@ -1977,6 +2210,16 @@ export default function DepoPage() {
             </div>
             <input type="date" value={addDate} onChange={(e) => setAddDate(e.target.value)} className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
             <input type="text" value={addNote} onChange={(e) => setAddNote(e.target.value)} placeholder="Not (ops)" className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
+            <div className="flex justify-start">
+              <button
+                type="button"
+                onClick={appendAddRow}
+                className="inline-flex items-center gap-1 rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Satir Ekle
+              </button>
+            </div>
           </div>
           {addError ? <p className="mt-3 text-sm text-rose-600">{addError}</p> : null}
           <div className="mt-4 flex justify-end gap-2">
@@ -2245,22 +2488,73 @@ export default function DepoPage() {
       {detailRow ? (
         <Modal title={`${transactionTypeLabel[detailRow.transaction.type]} Detayi`} onClose={() => setDetailTransactionId(null)} size="xl">
           <div className="space-y-3 text-sm">
-            <div className="rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-neutral-700">
-              <div>Tarih: {formatDateTime(detailRow.transaction.createdAt)}</div>
-              <div>Musteri: {detailRow.transaction.customerNameSnapshot ?? "-"}</div>
-              <div>Durum: {detailRow.transaction.status === "REVERSED" ? "Iptal Edildi" : "Aktif"}</div>
-              {detailRow.transaction.note ? <div>Not: {detailRow.transaction.note}</div> : null}
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(260px,0.6fr)]">
+              <div className="rounded-lg border border-black/10 bg-neutral-50 px-3 py-3 text-neutral-700">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                  Islem Ozeti
+                </div>
+                <div className="grid gap-1">
+                  <div>Tip: {transactionTypeLabel[detailRow.transaction.type]}</div>
+                  <div>Tarih: {formatDateTime(detailRow.transaction.createdAt)}</div>
+                  <div>Islem Ref: <span className="font-mono">{formatShortRef(detailRow.transaction.id)}</span></div>
+                  <div>Cari / Hedef: {detailRow.transaction.customerNameSnapshot ?? "-"}</div>
+                  <div>Durum: {detailRow.transaction.status === "REVERSED" ? "Iptal Edildi" : "Aktif"}</div>
+                  {detailColorSummary ? <div>Renk Ozeti: {detailColorSummary}</div> : null}
+                  {detailRow.transaction.note ? <div>Not: {detailRow.transaction.note}</div> : null}
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                <div className="rounded-lg border border-black/10 bg-white px-4 py-3">
+                  <div className="text-xs uppercase tracking-wide text-neutral-500">Toplam Top</div>
+                  <div className="mt-1 text-xl font-semibold text-neutral-900">
+                    {detailRow.totals.totalTops}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-black/10 bg-white px-4 py-3">
+                  <div className="text-xs uppercase tracking-wide text-neutral-500">Toplam Metre</div>
+                  <div className="mt-1 text-xl font-semibold text-neutral-900">
+                    {fmt(detailRow.totals.totalMetres)} m
+                  </div>
+                </div>
+              </div>
             </div>
+
             <div className="space-y-2">
               {detailLineGroups.map((group) => (
                 <div key={group.key} className="rounded-lg border border-black/10 bg-white p-3">
-                  <h4 className="text-sm font-semibold text-neutral-900">{group.patternNoSnapshot} - {group.patternNameSnapshot}</h4>
-                  <div className="mt-2 space-y-1 text-xs text-neutral-700">
-                    {group.lines.map((line) => (
-                      <div key={line.id}>{line.color}: {line.topCount} top / {fmt(line.totalMetres)} m</div>
-                    ))}
+                  <h4 className="text-sm font-semibold text-neutral-900">
+                    {group.patternNoSnapshot} - {group.patternNameSnapshot}
+                  </h4>
+                  <div className="mt-2 overflow-auto rounded-lg border border-black/10">
+                    <table className="w-full text-left text-xs text-neutral-700">
+                      <thead className="bg-neutral-50 text-neutral-600">
+                        <tr>
+                          <th className="px-2 py-1.5 font-semibold">Renk / Varyant</th>
+                          <th className="px-2 py-1.5 font-semibold">Top</th>
+                          <th className="px-2 py-1.5 font-semibold">Toplam Metre</th>
+                          <th className="px-2 py-1.5 font-semibold">Dagilim</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {group.lines.map((line) => (
+                          <tr key={line.id} className="border-t border-black/5">
+                            <td className="px-2 py-1.5">{line.color}</td>
+                            <td className="px-2 py-1.5">{line.topCount}</td>
+                            <td className="px-2 py-1.5">{fmt(line.totalMetres)} m</td>
+                            <td className="px-2 py-1.5">
+                              {line.topCount > 1
+                                ? `${line.topCount} x ${fmt(line.metrePerTop)} m`
+                                : `${fmt(line.metrePerTop)} m`}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                  <div className="mt-2 text-xs font-semibold text-neutral-800">Alt Toplam: {group.totalTop} top / {fmt(group.totalMetre)} m</div>
+                  <div className="mt-2 text-xs font-semibold text-neutral-800">
+                    Alt Toplam: {group.totalTop} top / {fmt(group.totalMetre)} m
+                  </div>
                 </div>
               ))}
             </div>
@@ -2359,12 +2653,23 @@ type ModalProps = {
 };
 
 function Modal({ title, children, onClose, size = "md" }: ModalProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const widthClass =
     size === "xl" ? "max-w-3xl" : size === "lg" ? "max-w-xl" : "max-w-md";
 
+  useModalFocusTrap({ containerRef: dialogRef });
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div className={cn("w-full rounded-2xl border border-black/10 bg-white p-5 shadow-2xl", widthClass)} onClick={(event) => event.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className={cn("w-full rounded-2xl border border-black/10 bg-white p-5 shadow-2xl", widthClass)}
+        onClick={(event) => event.stopPropagation()}
+      >
         <h3 className="text-lg font-semibold text-neutral-900">{title}</h3>
         <div className="mt-2">{children}</div>
       </div>

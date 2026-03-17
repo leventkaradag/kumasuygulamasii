@@ -10,6 +10,7 @@ import type { Pattern, Variant } from "@/lib/domain/pattern";
 import { getPatternDigitalImageSrc, getPatternFinalImageSrc } from "@/lib/patternImage";
 import { getFallbackPatternMetricSummary, type PatternMetricSummary } from "@/lib/patternMetrics";
 import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
+import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 
 type PatternDetailPanelProps = {
   pattern: Pattern | null;
@@ -154,6 +155,7 @@ export function PatternDetailPanel({
   const [metersStatus, setMetersStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [archiveStatus, setArchiveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [showMetersModal, setShowMetersModal] = useState(false);
+  const metersModalRef = useRef<HTMLDivElement | null>(null);
   const [metersError, setMetersError] = useState("");
   const [metersDraft, setMetersDraft] = useState<Record<keyof MeterFields, string>>({
     totalProducedMeters: "0",
@@ -167,6 +169,8 @@ export function PatternDetailPanel({
   const [isEditingLogistics, setIsEditingLogistics] = useState(false);
   const [logisticsDraft, setLogisticsDraft] = useState<LogisticsDraft>(() => createLogisticsDraft());
   const [logisticsError, setLogisticsError] = useState("");
+
+  useModalFocusTrap({ enabled: showMetersModal, containerRef: metersModalRef });
   const [logisticsStatus, setLogisticsStatus] = useState<"idle" | "saving" | "saved">("idle");
 
   const resetNoteStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1376,7 +1380,14 @@ export function PatternDetailPanel({
 
       {showMetersModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+          <div
+            ref={metersModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Metreleri Duzenle"
+            tabIndex={-1}
+            className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"
+          >
             <div className="mb-4 flex items-start justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-neutral-900">Metreleri Düzenle</h2>

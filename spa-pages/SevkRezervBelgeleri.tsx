@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ExternalLink, Search } from "lucide-react";
 import { useAuthProfile } from "@/components/AuthProfileProvider";
@@ -12,6 +12,7 @@ import { depoLocalRepo } from "@/lib/repos/depoLocalRepo";
 import { depoTransactionsLocalRepo } from "@/lib/repos/depoTransactionsLocalRepo";
 import type { WeavingDispatchDocument } from "@/lib/domain/weaving";
 import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
+import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 
 type TypeFilter =
   | "ALL"
@@ -681,6 +682,7 @@ type ModalProps = {
 };
 
 function Modal({ title, children, onClose, size = "md" }: ModalProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const widthClass =
     size === "xl" ? "max-w-3xl" : size === "lg" ? "max-w-xl" : "max-w-md";
 
@@ -699,6 +701,8 @@ function Modal({ title, children, onClose, size = "md" }: ModalProps) {
     };
   }, [mounted]);
 
+  useModalFocusTrap({ enabled: mounted, containerRef: dialogRef });
+
   if (!mounted) return null;
 
   return createPortal(
@@ -707,6 +711,11 @@ function Modal({ title, children, onClose, size = "md" }: ModalProps) {
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
         className={cn(
           "w-full max-h-[85vh] overflow-hidden rounded-2xl border border-black/10 bg-white shadow-2xl",
           widthClass

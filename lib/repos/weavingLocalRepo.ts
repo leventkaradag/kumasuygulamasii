@@ -33,6 +33,7 @@ type CreatePlanInput = {
   patternNoSnapshot: string;
   patternNameSnapshot: string;
   plannedMeters: number;
+  hamKumasEniCm?: number | null;
   tarakEniCm?: number | null;
   variants?: WeavingPlanVariant[];
   createdAt?: string;
@@ -94,6 +95,16 @@ type CreateDyehouseToWarehouseDispatchInput = {
   note?: string;
 };
 
+type AddProgressInput = {
+  planId: string;
+  meters: number;
+  createdAt?: string;
+  note?: string;
+  variantId?: string;
+  metersPerUnit?: number;
+  unitCount?: number;
+};
+
 const canUseStorage = () =>
   typeof window !== "undefined" && typeof window.localStorage !== "undefined";
 
@@ -153,6 +164,15 @@ const normalizeOptionalPositiveNumber = (value: unknown) => {
   if (value === null || value === undefined || value === "") return null;
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  return numeric;
+};
+
+const normalizeOptionalPositiveInteger = (value: unknown) => {
+  if (value === null || value === undefined || value === "") return undefined;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || !Number.isInteger(numeric) || numeric <= 0) {
+    return undefined;
+  }
   return numeric;
 };
 
@@ -247,7 +267,11 @@ const hasPlanVariants = (
 
 const normalizeStoredPlan = (input: unknown): WeavingPlan | null => {
   if (!input || typeof input !== "object") return null;
-  const raw = input as Partial<WeavingPlan> & { variants?: unknown; tarakEniCm?: unknown };
+  const raw = input as Partial<WeavingPlan> & {
+    variants?: unknown;
+    hamKumasEniCm?: unknown;
+    tarakEniCm?: unknown;
+  };
 
   const patternId = normalizeText(raw.patternId);
   const patternNoSnapshot = normalizeText(raw.patternNoSnapshot);
@@ -262,7 +286,11 @@ const normalizeStoredPlan = (input: unknown): WeavingPlan | null => {
     Number.isFinite(plannedMetersFromRaw) && plannedMetersFromRaw > 0
       ? plannedMetersFromRaw
       : plannedMetersFromVariants;
-  const tarakEniCm = normalizeOptionalPositiveNumber(raw.tarakEniCm);
+  const storedPlanTarakEniCm = normalizeOptionalPositiveNumber(raw.tarakEniCm);
+  const hamKumasEniCm =
+    raw.hamKumasEniCm !== undefined
+      ? normalizeOptionalPositiveNumber(raw.hamKumasEniCm)
+      : storedPlanTarakEniCm;
   if (!patternId || !patternNoSnapshot || !patternNameSnapshot) return null;
   if (!Number.isFinite(plannedMeters) || plannedMeters <= 0) return null;
 
@@ -292,7 +320,8 @@ const normalizeStoredPlan = (input: unknown): WeavingPlan | null => {
     patternNoSnapshot,
     patternNameSnapshot,
     plannedMeters,
-    tarakEniCm,
+    hamKumasEniCm,
+    tarakEniCm: raw.hamKumasEniCm !== undefined ? storedPlanTarakEniCm : null,
     variants: variants.length > 0 ? variants : undefined,
     createdAt,
     note: normalizeText(raw.note),
@@ -326,6 +355,11 @@ const normalizeStoredProgress = (input: unknown): WeavingProgressEntry | null =>
     planId,
     createdAt,
     meters,
+    metersPerUnit: normalizeOptionalPositiveNumber(raw.metersPerUnit) ?? undefined,
+    unitCount: normalizeOptionalPositiveInteger(raw.unitCount) ?? 1,
+    variantId: normalizeText(raw.variantId),
+    variantCodeSnapshot: normalizeText(raw.variantCodeSnapshot),
+    colorNameSnapshot: normalizeText(raw.colorNameSnapshot),
     note: normalizeText(raw.note),
   };
 };
@@ -782,7 +816,9 @@ export const weavingLocalRepo = {
       normalizedVariants.length > 0
         ? sumVariantPlannedMeters(normalizedVariants)
         : normalizePositiveNumber(input.plannedMeters, "Plan metre");
-    const tarakEniCm = normalizeOptionalPositiveNumber(input.tarakEniCm);
+    const hamKumasEniCm = normalizeOptionalPositiveNumber(
+      input.hamKumasEniCm ?? input.tarakEniCm
+    );
 
     const nextPlan: WeavingPlan = {
       id: createId(),
@@ -790,7 +826,8 @@ export const weavingLocalRepo = {
       patternNoSnapshot: normalizeRequiredText(input.patternNoSnapshot, "patternNoSnapshot"),
       patternNameSnapshot: normalizeRequiredText(input.patternNameSnapshot, "patternNameSnapshot"),
       plannedMeters,
-      tarakEniCm,
+      hamKumasEniCm,
+      tarakEniCm: null,
       variants: normalizedVariants.length > 0 ? normalizedVariants : undefined,
       createdAt: toIsoDate(input.createdAt ?? new Date().toISOString(), "createdAt"),
       note: normalizeText(input.note),
@@ -867,66 +904,106 @@ export const weavingLocalRepo = {
     meters: number,
     note?: string
   ): WeavingPlan {
-    const normalizedPlanId = normalizeRequiredText(planId, "planId");
-    const normalizedVariantId = normalizeRequiredText(variantId, "Varyant");
-    const normalizedMeters = normalizePositiveNumber(meters, "Metre");
-    const normalizedNote = normalizeText(note);
-
-    const updated = updatePlan(normalizedPlanId, (plan) => {
-      const variants = plan.variants ?? [];
-      if (variants.length === 0) {
-        throw new Error("Bu planda varyant bulunmuyor.");
-      }
-
-      let found = false;
-      const nextVariants: WeavingPlanVariant[] = variants.map((variant) => {
-        if (variant.id !== normalizedVariantId) return variant;
-        found = true;
-
-        const wovenMeters = variant.wovenMeters + normalizedMeters;
-        const status: WeavingPlanVariantStatus =
-          wovenMeters >= variant.plannedMeters ? "DONE" : "ACTIVE";
-        const nextVariant: WeavingPlanVariant = {
-          ...variant,
-          wovenMeters,
-          status,
-          notes:
-            normalizedNote && normalizedNote.length > 0
-              ? [variant.notes, normalizedNote].filter(Boolean).join(" | ")
-              : variant.notes,
-        };
-        return nextVariant;
-      });
-
-      if (!found) throw new Error("Varyant bulunamadi.");
-
-      return {
-        ...plan,
-        plannedMeters: sumVariantPlannedMeters(nextVariants),
-        variants: nextVariants,
-      };
+    this.addProgress({
+      planId,
+      variantId,
+      meters,
+      note,
+      unitCount: 1,
+      metersPerUnit: meters,
     });
-
+    const updated = readPlans().find((plan) => plan.id === planId);
     if (!updated) throw new Error("Plan bulunamadi.");
     return updated;
   },
 
   addProgress(
-    planId: string,
-    meters: number,
-    createdAt?: string,
-    note?: string
+    inputOrPlanId: AddProgressInput | string,
+    metersArg?: number,
+    createdAtArg?: string,
+    noteArg?: string
   ): WeavingProgressEntry {
-    const normalizedPlanId = normalizeRequiredText(planId, "planId");
+    const input: AddProgressInput =
+      typeof inputOrPlanId === "string"
+        ? {
+            planId: inputOrPlanId,
+            meters: metersArg ?? 0,
+            createdAt: createdAtArg,
+            note: noteArg,
+          }
+        : inputOrPlanId;
+    const normalizedPlanId = normalizeRequiredText(input.planId, "planId");
     const plan = readPlans().find((row) => row.id === normalizedPlanId);
     if (!plan) throw new Error("Plan bulunamadi.");
+    const normalizedMeters = normalizePositiveNumber(input.meters, "Metre");
+    const unitCount = normalizeOptionalPositiveInteger(input.unitCount) ?? 1;
+    const metersPerUnit =
+      normalizeOptionalPositiveNumber(input.metersPerUnit) ??
+      (unitCount > 0 ? normalizedMeters / unitCount : undefined);
+
+    if (
+      metersPerUnit !== undefined &&
+      Math.abs(metersPerUnit * unitCount - normalizedMeters) > 1e-6
+    ) {
+      throw new Error("Toplam ilerleme, metre x adet ile uyusmuyor.");
+    }
+
+    let variantId: string | undefined;
+    let variantCodeSnapshot: string | undefined;
+    let colorNameSnapshot: string | undefined;
+
+    if (normalizeText(input.variantId)) {
+      const normalizedVariantId = normalizeRequiredText(input.variantId!, "Varyant");
+      const updated = updatePlan(normalizedPlanId, (currentPlan) => {
+        const variants = currentPlan.variants ?? [];
+        if (variants.length === 0) {
+          throw new Error("Bu planda varyant bulunmuyor.");
+        }
+
+        let matchedVariant: WeavingPlanVariant | undefined;
+        const nextVariants: WeavingPlanVariant[] = variants.map((variant) => {
+          if (variant.id !== normalizedVariantId) return variant;
+          matchedVariant = variant;
+
+          const wovenMeters = variant.wovenMeters + normalizedMeters;
+          const status: WeavingPlanVariantStatus =
+            wovenMeters >= variant.plannedMeters ? "DONE" : "ACTIVE";
+          return {
+            ...variant,
+            wovenMeters,
+            status,
+          };
+        });
+
+        if (!matchedVariant) {
+          throw new Error("Varyant bulunamadi.");
+        }
+
+        variantId = matchedVariant.id;
+        variantCodeSnapshot = matchedVariant.variantCode;
+        colorNameSnapshot = matchedVariant.colorName;
+
+        return {
+          ...currentPlan,
+          plannedMeters: sumVariantPlannedMeters(nextVariants),
+          variants: nextVariants,
+        };
+      });
+
+      if (!updated) throw new Error("Plan bulunamadi.");
+    }
 
     const next: WeavingProgressEntry = {
       id: createId(),
       planId: normalizedPlanId,
-      createdAt: toIsoDate(createdAt ?? new Date().toISOString(), "createdAt"),
-      meters: normalizePositiveNumber(meters, "Metre"),
-      note: normalizeText(note),
+      createdAt: toIsoDate(input.createdAt ?? new Date().toISOString(), "createdAt"),
+      meters: normalizedMeters,
+      metersPerUnit,
+      unitCount,
+      variantId,
+      variantCodeSnapshot,
+      colorNameSnapshot,
+      note: normalizeText(input.note),
     };
 
     const entries = readProgress();
@@ -1148,9 +1225,34 @@ export const weavingLocalRepo = {
 
   deleteProgress(id: string): boolean {
     const entries = readProgress();
+    const removed = entries.find((entry) => entry.id === id);
     const next = entries.filter((entry) => entry.id !== id);
     if (next.length === entries.length) return false;
     writeProgress(next);
+
+    if (removed?.variantId) {
+      updatePlan(removed.planId, (plan) => {
+        if (!hasPlanVariants(plan)) return plan;
+
+        const nextVariants = plan.variants.map((variant) => {
+          if (variant.id !== removed.variantId) return variant;
+          const wovenMeters = Math.max(0, variant.wovenMeters - removed.meters);
+          const status: WeavingPlanVariantStatus =
+            wovenMeters >= variant.plannedMeters ? "DONE" : "ACTIVE";
+          return {
+            ...variant,
+            wovenMeters,
+            status,
+          };
+        });
+
+        return {
+          ...plan,
+          variants: nextVariants,
+        };
+      });
+    }
+
     return true;
   },
 

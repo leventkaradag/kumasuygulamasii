@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, SlidersHorizontal, X } from "lucide-react";
 import { useAuthProfile } from "@/components/AuthProfileProvider";
 import Layout from "@/components/Layout";
@@ -14,6 +14,7 @@ import { buildPatternMetricMap } from "@/lib/patternMetrics";
 import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
 import { patternsRepo } from "@/lib/repos/patternsRepo";
 import { cn } from "@/lib/cn";
+import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 
 const stageOrder: Record<Stage, number> = {
   DOKUMA: 0,
@@ -192,6 +193,7 @@ export default function DesenlerPage() {
   const [activeTab, setActiveTab] = useState<PatternTab>("ACTIVE");
   const [filters, setFilters] = useState<PatternFilters>({});
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const filterModalRef = useRef<HTMLDivElement | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(seedPatterns[0]?.id ?? null);
   const [showPatternModal, setShowPatternModal] = useState(false);
   const [patternModalMode, setPatternModalMode] = useState<"add" | "edit">("edit");
@@ -236,6 +238,8 @@ export default function DesenlerPage() {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [isFilterOpen]);
+
+  useModalFocusTrap({ enabled: isFilterOpen, containerRef: filterModalRef });
 
   const selectedPattern = filteredPatterns.find((pattern) => pattern.id === selectedId) ?? null;
   const modalPattern = patternModalMode === "add" ? emptyPatternForCreate : selectedPattern;
@@ -482,6 +486,11 @@ export default function DesenlerPage() {
             onClick={() => setIsFilterOpen(false)}
           >
             <div
+              ref={filterModalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Filtreler"
+              tabIndex={-1}
               className="w-full max-w-md rounded-2xl border border-black/10 bg-white shadow-2xl"
               onClick={(event) => event.stopPropagation()}
             >

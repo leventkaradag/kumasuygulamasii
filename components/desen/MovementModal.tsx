@@ -1,10 +1,11 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useMemo, useRef, useState } from "react";
 import { Movement, MovementType, Stage } from "@/lib/domain/movement";
 import { Variant } from "@/lib/domain/pattern";
 import { movementsLocalRepo } from "@/lib/repos/movementsLocalRepo";
 import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
+import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 
 type Props = {
   patternId: string;
@@ -30,6 +31,7 @@ const shouldUpdateStage = (stage: Stage, type: MovementType) => {
 };
 
 export function MovementModal({ patternId, variants, onClose, onSaved }: Props) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const [stage, setStage] = useState<Stage>("DEPO");
   const [type, setType] = useState<MovementType>("IN");
   const [variantId, setVariantId] = useState<string>("GENEL");
@@ -42,6 +44,8 @@ export function MovementModal({ patternId, variants, onClose, onSaved }: Props) 
     () => [{ id: "GENEL", name: "GENEL", active: true }, ...variants],
     [variants]
   );
+
+  useModalFocusTrap({ containerRef: dialogRef });
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -73,7 +77,14 @@ export function MovementModal({ patternId, variants, onClose, onSaved }: Props) 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Hareket Ekle"
+        tabIndex={-1}
+        className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"
+      >
         <div className="mb-4 flex items-start justify-between">
           <div>
             <h2 className="text-lg font-semibold text-neutral-900">Hareket Ekle</h2>

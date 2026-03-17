@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useAuthProfile } from "@/components/AuthProfileProvider";
 import Layout from "../components/Layout";
@@ -10,6 +10,7 @@ import type { Dyehouse, DyehouseJob, DyehouseJobStatus, DyehouseLine } from "@/l
 import type { WeavingDispatchDocument } from "@/lib/domain/weaving";
 import { dyehouseLocalRepo } from "@/lib/repos/dyehouseLocalRepo";
 import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
+import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 
 type ViewMode = "MIX" | "BY_DYEHOUSE";
 type JobTab = "RECEIVED" | "IN_PROCESS" | "FINISHED";
@@ -66,6 +67,20 @@ const toTimestamp = (value: string) => {
 const sumMeters = (lines: DyehouseLine[]) =>
   lines.reduce((sum, line) => sum + line.metersPlanned, 0);
 
+const parseDraftKg = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed.replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const computeWasteKg = (inputKg: string, outputKg: string) => {
+  const parsedInput = parseDraftKg(inputKg);
+  const parsedOutput = parseDraftKg(outputKg);
+  if (parsedInput === undefined || parsedOutput === undefined) return undefined;
+  return parsedInput - parsedOutput;
+};
+
 const createLineDraft = (line?: DyehouseLine): LineDraft => ({
   id: line?.id ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`,
   colorName: line?.colorName ?? "",
@@ -83,8 +98,13 @@ const createLineDraft = (line?: DyehouseLine): LineDraft => ({
       ? String(line.outputKg)
       : "",
   wasteKg:
-    typeof line?.wasteKg === "number" && Number.isFinite(line.wasteKg)
-      ? String(line.wasteKg)
+    typeof line?.inputKg === "number" &&
+    Number.isFinite(line.inputKg) &&
+    typeof line?.outputKg === "number" &&
+    Number.isFinite(line.outputKg)
+      ? String(line.inputKg - line.outputKg)
+      : typeof line?.wasteKg === "number" && Number.isFinite(line.wasteKg)
+        ? String(line.wasteKg)
       : "",
   notes: line?.notes ?? "",
 });
@@ -104,9 +124,11 @@ function StatusBadge({ status }: { status: DyehouseJobStatus }) {
 
 export default function Boyahane() {
   const { permissions } = useAuthProfile();
-  const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
-  const [jobs, setJobs] = useState<DyehouseJob[]>([]);
-  const [dispatchDocuments, setDispatchDocuments] = useState<WeavingDispatchDocument[]>([]);
+  const [dyehouses, setDyehouses] = useState<Dyehouse[]>(() => dyehouseLocalRepo.list());
+  const [jobs, setJobs] = useState<DyehouseJob[]>(() => dyehouseLocalRepo.listJobs());
+  const [dispatchDocuments, setDispatchDocuments] = useState<WeavingDispatchDocument[]>(() =>
+    weavingLocalRepo.listDispatchDocuments()
+  );
   const [viewMode, setViewMode] = useState<ViewMode>("MIX");
   const [dyehouseFilter, setDyehouseFilter] = useState("ALL");
   const [query, setQuery] = useState("");
@@ -121,27 +143,19 @@ export default function Boyahane() {
     setDispatchDocuments(weavingLocalRepo.listDispatchDocuments());
   };
 
-  useEffect(() => {
-    refreshData();
-  }, []);
-
-  useEffect(() => {
-    if (viewMode !== "BY_DYEHOUSE") return;
-
-    if (dyehouses.length === 0) {
-      setDyehouseFilter("ALL");
-      return;
+  const effectiveDyehouseFilter = useMemo(() => {
+    if (dyehouses.length === 0) return "ALL";
+    if (viewMode === "MIX") {
+      if (dyehouseFilter === "ALL") return "ALL";
+      return dyehouses.some((dyehouse) => dyehouse.id === dyehouseFilter)
+        ? dyehouseFilter
+        : "ALL";
     }
-
-    if (dyehouseFilter === "ALL") {
-      setDyehouseFilter(dyehouses[0].id);
-      return;
+    if (dyehouses.some((dyehouse) => dyehouse.id === dyehouseFilter)) {
+      return dyehouseFilter;
     }
-
-    if (!dyehouses.some((dyehouse) => dyehouse.id === dyehouseFilter)) {
-      setDyehouseFilter(dyehouses[0].id);
-    }
-  }, [viewMode, dyehouses, dyehouseFilter]);
+    return dyehouses[0].id;
+  }, [dyehouseFilter, dyehouses, viewMode]);
 
   const selectedJob = useMemo(
     () => (selectedJobId ? jobs.find((job) => job.id === selectedJobId) ?? null : null),
@@ -168,14 +182,17 @@ export default function Boyahane() {
 
   const normalizedQuery = normalizeSearchToken(query);
 
-  const inScope = (dyehouseId?: string | null) => {
-    if (viewMode === "MIX") {
-      if (dyehouseFilter === "ALL") return true;
-      return dyehouseId === dyehouseFilter;
-    }
-    if (dyehouses.length === 0) return true;
-    return dyehouseId === dyehouseFilter;
-  };
+  const inScope = useCallback(
+    (dyehouseId?: string | null) => {
+      if (viewMode === "MIX") {
+        if (effectiveDyehouseFilter === "ALL") return true;
+        return dyehouseId === effectiveDyehouseFilter;
+      }
+      if (dyehouses.length === 0) return true;
+      return dyehouseId === effectiveDyehouseFilter;
+    },
+    [dyehouses.length, effectiveDyehouseFilter, viewMode]
+  );
 
   const filteredIncomingDocs = useMemo(
     () =>
@@ -191,7 +208,7 @@ export default function Boyahane() {
           return code.includes(normalizedQuery) || name.includes(normalizedQuery);
         })
         .sort((a, b) => toTimestamp(b.createdAt) - toTimestamp(a.createdAt)),
-    [incomingDispatchDocs, jobsByDispatchDocId, normalizedQuery, dyehouseFilter, viewMode, dyehouses]
+    [incomingDispatchDocs, jobsByDispatchDocId, normalizedQuery, inScope]
   );
 
   const filteredJobs = useMemo(
@@ -206,7 +223,7 @@ export default function Boyahane() {
           return code.includes(normalizedQuery) || name.includes(normalizedQuery);
         })
         .sort((a, b) => toTimestamp(b.receivedAt) - toTimestamp(a.receivedAt)),
-    [jobs, jobTab, normalizedQuery, dyehouseFilter, viewMode, dyehouses]
+    [jobs, jobTab, normalizedQuery, inScope]
   );
 
   const jobsByStatus = useMemo(() => {
@@ -278,7 +295,7 @@ export default function Boyahane() {
             </div>
 
             <select
-              value={dyehouseFilter}
+              value={effectiveDyehouseFilter}
               onChange={(event) => setDyehouseFilter(event.target.value)}
               className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
             >
@@ -541,7 +558,7 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
         metersPlanned: parsePositive(row.metersPlanned, `${colorName} metre`),
         inputKg: parseOptionalNonNegative(row.inputKg, `${colorName} giris kg`),
         outputKg: parseOptionalNonNegative(row.outputKg, `${colorName} cikis kg`),
-        wasteKg: parseOptionalNonNegative(row.wasteKg, `${colorName} fire kg`),
+        wasteKg: computeWasteKg(row.inputKg, row.outputKg),
         notes: row.notes.trim() || undefined,
       } satisfies DyehouseLine;
     });
@@ -559,9 +576,7 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
       const row = lineDrafts[index];
       const inputKg = parseNonNegative(row.inputKg, `${line.colorName} giris kg`);
       const outputKg = parseNonNegative(row.outputKg, `${line.colorName} cikis kg`);
-      const wasteKg = row.wasteKg.trim()
-        ? parseNonNegative(row.wasteKg, `${line.colorName} fire kg`)
-        : Math.max(0, inputKg - outputKg);
+      const wasteKg = inputKg - outputKg;
       return {
         ...line,
         inputKg,
@@ -579,6 +594,16 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
       return sum + parsed;
     }, 0);
   }, [lineDrafts]);
+
+  const finishWarnings = useMemo(
+    () =>
+      lineDrafts.flatMap((row) => {
+        const wasteKg = computeWasteKg(row.inputKg, row.outputKg);
+        if (wasteKg === undefined || wasteKg >= 0) return [];
+        return [`${row.colorName || "Satir"} icin Cikis Kg, Giris Kg'dan buyuk.`];
+      }),
+    [lineDrafts]
+  );
 
   const updateLine = (id: string, key: keyof LineDraft, value: string) => {
     setLineDrafts((prev) => prev.map((row) => (row.id === id ? { ...row, [key]: value } : row)));
@@ -883,59 +908,89 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
                       </tr>
                     </thead>
                     <tbody>
-                      {lineDrafts.map((row) => (
-                        <tr key={`${row.id}-finish`} className="border-t border-black/5">
-                          <td className="px-2 py-1.5">{row.colorName || "-"}</td>
-                          <td className="px-2 py-1.5">
-                            {row.metersPlanned ? fmt(Number(row.metersPlanned) || 0) : "-"}
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={row.inputKg}
-                              disabled={!finishEditable}
-                              onChange={(event) => updateLine(row.id, "inputKg", event.target.value)}
-                              className="w-full rounded border border-black/10 bg-white px-2 py-1 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
-                            />
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={row.outputKg}
-                              disabled={!finishEditable}
-                              onChange={(event) => updateLine(row.id, "outputKg", event.target.value)}
-                              className="w-full rounded border border-black/10 bg-white px-2 py-1 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
-                            />
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={row.wasteKg}
-                              disabled={!finishEditable}
-                              onChange={(event) => updateLine(row.id, "wasteKg", event.target.value)}
-                              className="w-full rounded border border-black/10 bg-white px-2 py-1 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
-                            />
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <input
-                              type="text"
-                              value={row.notes}
-                              disabled={!finishEditable}
-                              onChange={(event) => updateLine(row.id, "notes", event.target.value)}
-                              className="w-full rounded border border-black/10 bg-white px-2 py-1 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
-                            />
-                          </td>
-                        </tr>
-                      ))}
+                      {lineDrafts.map((row) => {
+                        const computedWasteKg = computeWasteKg(row.inputKg, row.outputKg);
+                        const wasteDisplay =
+                          computedWasteKg !== undefined
+                            ? fmt(computedWasteKg)
+                            : row.wasteKg.trim();
+                        const hasWasteWarning =
+                          computedWasteKg !== undefined && computedWasteKg < 0;
+
+                        return (
+                          <tr key={`${row.id}-finish`} className="border-t border-black/5">
+                            <td className="px-2 py-1.5">{row.colorName || "-"}</td>
+                            <td className="px-2 py-1.5">
+                              {row.metersPlanned ? fmt(Number(row.metersPlanned) || 0) : "-"}
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={row.inputKg}
+                                disabled={!finishEditable}
+                                onChange={(event) => updateLine(row.id, "inputKg", event.target.value)}
+                                className="w-full rounded border border-black/10 bg-white px-2 py-1 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
+                              />
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={row.outputKg}
+                                disabled={!finishEditable}
+                                onChange={(event) => updateLine(row.id, "outputKg", event.target.value)}
+                                className="w-full rounded border border-black/10 bg-white px-2 py-1 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
+                              />
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <input
+                                type="text"
+                                readOnly
+                                value={wasteDisplay}
+                                className={cn(
+                                  "w-full rounded border px-2 py-1 text-xs focus:outline-none",
+                                  hasWasteWarning
+                                    ? "border-rose-500/30 bg-rose-50 text-rose-700"
+                                    : "border-black/10 bg-neutral-50 text-neutral-700"
+                                )}
+                              />
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <input
+                                type="text"
+                                value={row.notes}
+                                disabled={!finishEditable}
+                                onChange={(event) => updateLine(row.id, "notes", event.target.value)}
+                                className="w-full rounded border border-black/10 bg-white px-2 py-1 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
+
+                {finishWarnings.length > 0 ? (
+                  <div className="rounded-lg border border-rose-500/30 bg-rose-50 px-3 py-3 text-sm text-rose-800">
+                    <div className="flex items-start gap-2">
+                      <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-100 font-semibold text-rose-700">
+                        !
+                      </span>
+                      <div className="space-y-1">
+                        <div className="font-medium">Fire sonucu negatif gorunuyor.</div>
+                        {finishWarnings.map((warning) => (
+                          <div key={warning} className="text-xs text-rose-700">
+                            {warning}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
                 {finishEditable ? (
                   <div className="flex flex-wrap justify-end gap-2">
@@ -960,7 +1015,7 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
               </>
             ) : (
               <p className="rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
-                Kg ve fire bilgileri sadece "Bitir" adiminda girilir.
+                Kg ve fire bilgileri sadece Bitir adiminda girilir.
               </p>
             )}
           </div>
@@ -997,7 +1052,7 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
                   onClick={createDepotDispatch}
                   className="rounded-lg border border-emerald-500/30 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
                 >
-                  Depo'ya Cikis Belgesi Olustur
+                  Depoya Cikis Belgesi Olustur
                 </button>
               ) : null}
             </div>
@@ -1038,8 +1093,11 @@ type ModalProps = {
 };
 
 function Modal({ title, children, onClose, size = "md" }: ModalProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const widthClass =
     size === "xl" ? "max-w-5xl" : size === "lg" ? "max-w-2xl" : "max-w-md";
+
+  useModalFocusTrap({ containerRef: dialogRef });
 
   return (
     <div
@@ -1047,6 +1105,11 @@ function Modal({ title, children, onClose, size = "md" }: ModalProps) {
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
         className={cn(
           "max-h-[88vh] w-full overflow-hidden rounded-2xl border border-black/10 bg-white shadow-2xl",
           widthClass

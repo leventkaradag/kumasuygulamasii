@@ -19,6 +19,7 @@ export type WeavingPlan = {
   patternNoSnapshot: string;
   patternNameSnapshot: string;
   plannedMeters: number;
+  hamKumasEniCm?: number | null;
   tarakEniCm?: number | null;
   variants?: WeavingPlanVariant[];
   createdAt: string;
@@ -32,6 +33,11 @@ export type WeavingProgressEntry = {
   planId: string;
   createdAt: string;
   meters: number;
+  metersPerUnit?: number;
+  unitCount?: number;
+  variantId?: string;
+  variantCodeSnapshot?: string;
+  colorNameSnapshot?: string;
   note?: string;
 };
 
