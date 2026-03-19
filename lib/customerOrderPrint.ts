@@ -1,36 +1,32 @@
-export type DyehouseOrderPrintRow = {
+"use client";
+
+import { printHtmlInHiddenFrame } from "@/lib/dyehouseOrderPrint";
+
+export type CustomerOrderPrintRow = {
   sequence: number;
   colorName: string;
+  colorCode?: string;
   variantDescription?: string;
   topCount?: number;
-  rawMeters?: number;
+  meters?: number;
   status?: string;
-  description?: string;
+  note?: string;
 };
 
-export type DyehouseOrderPrintBlock = {
+export type CustomerOrderPrintBlock = {
   sequence: number;
   patternCode?: string;
   patternName?: string;
-  rows: DyehouseOrderPrintRow[];
+  rows: CustomerOrderPrintRow[];
 };
 
-export type DyehouseOrderPrintPayload = {
-  title: string;
-  companyTitle: string;
-  attentionLine?: string;
+export type CustomerOrderPrintPayload = {
+  customerName: string;
   orderDate: string;
-  patternBlocks: DyehouseOrderPrintBlock[];
-  details: {
-    patternCode?: string;
-    content?: string;
-    rawWidth?: string;
-    rawWeight?: string;
-    finishedWidth?: string;
-    processNo?: string;
-    extraNote?: string;
-    generalNote?: string;
-  };
+  orderTitle?: string;
+  generalNote?: string;
+  patternBlocks: CustomerOrderPrintBlock[];
+  companyTitle?: string;
 };
 
 const fmt = (value: number) => value.toLocaleString("tr-TR", { maximumFractionDigits: 2 });
@@ -43,10 +39,10 @@ const escapeHtml = (value: string) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
-export const buildDyehouseOrderPrintHtml = (payload: DyehouseOrderPrintPayload) => {
-  const title = escapeHtml(payload.title.trim() || "Boyahane Siparisi");
-  const companyTitle = escapeHtml(payload.companyTitle.trim() || "KUMASCI TEKSTIL");
-  const attentionLine = escapeHtml(payload.attentionLine?.trim() || "Dikkatine");
+export const buildCustomerOrderPrintHtml = (payload: CustomerOrderPrintPayload) => {
+  const companyTitle = escapeHtml(payload.companyTitle?.trim() || "KUMASCI TEKSTIL");
+  const customerName = escapeHtml(payload.customerName.trim() || "Musteri");
+  const orderTitle = escapeHtml(payload.orderTitle?.trim() || "Musteri Siparisi");
   const orderDate = escapeHtml(payload.orderDate);
 
   const blockHtml = payload.patternBlocks
@@ -58,11 +54,12 @@ export const buildDyehouseOrderPrintHtml = (payload: DyehouseOrderPrintPayload) 
             <tr>
               <td>${row.sequence}</td>
               <td>${escapeHtml(row.colorName)}</td>
+              <td>${escapeHtml(row.colorCode || "-")}</td>
               <td>${escapeHtml(row.variantDescription || "-")}</td>
               <td>${row.topCount ?? "-"}</td>
-              <td>${row.rawMeters ? fmt(row.rawMeters) : "-"}</td>
+              <td>${row.meters ? fmt(row.meters) : "-"}</td>
               <td>${escapeHtml(row.status || "-")}</td>
-              <td>${escapeHtml(row.description || "-")}</td>
+              <td>${escapeHtml(row.note || "-")}</td>
             </tr>
           `
         )
@@ -79,9 +76,10 @@ export const buildDyehouseOrderPrintHtml = (payload: DyehouseOrderPrintPayload) 
               <tr>
                 <th>Sira</th>
                 <th>Renk</th>
-                <th>Aciklama</th>
+                <th>Renk Kodu</th>
+                <th>Varyant / Aciklama</th>
                 <th>Top</th>
-                <th>Ham Mt</th>
+                <th>Metre</th>
                 <th>Durum</th>
                 <th>Not</th>
               </tr>
@@ -93,28 +91,10 @@ export const buildDyehouseOrderPrintHtml = (payload: DyehouseOrderPrintPayload) 
     })
     .join("");
 
-  const detailRows = ([
-    ["Genel Referans", payload.details.patternCode],
-    ["Icerik", payload.details.content],
-    ["Ham En", payload.details.rawWidth],
-    ["Ham Gramaj", payload.details.rawWeight],
-    ["Mamul En", payload.details.finishedWidth],
-    ["Proses No", payload.details.processNo],
-    ["Ekstra Not", payload.details.extraNote],
-  ] as Array<[string, string | undefined]>)
-    .filter(([, value]) => value?.trim())
-    .map(
-      ([label, value]) => `
-        <div class="detail-item">
-          <div class="detail-label">${escapeHtml(label)}</div>
-          <div class="detail-value">${escapeHtml(value ?? "")}</div>
-        </div>
-      `
-    )
-    .join("");
-
-  const noteBlock = payload.details.generalNote?.trim()
-    ? `<div class="notes"><div class="detail-label">Aciklama</div><div>${escapeHtml(payload.details.generalNote)}</div></div>`
+  const noteBlock = payload.generalNote?.trim()
+    ? `<div class="notes"><div class="label">Genel Not</div><div>${escapeHtml(
+        payload.generalNote
+      )}</div></div>`
     : "";
 
   return `
@@ -122,7 +102,7 @@ export const buildDyehouseOrderPrintHtml = (payload: DyehouseOrderPrintPayload) 
     <html lang="tr">
       <head>
         <meta charset="utf-8" />
-        <title>${title}</title>
+        <title>${orderTitle}</title>
         <style>
           @page { size: A4; margin: 14mm; }
           * { box-sizing: border-box; }
@@ -140,8 +120,8 @@ export const buildDyehouseOrderPrintHtml = (payload: DyehouseOrderPrintPayload) 
           .topbar {
             display: flex;
             justify-content: space-between;
-            gap: 20px;
             align-items: flex-start;
+            gap: 20px;
             border-bottom: 2px solid #dcc4a4;
             padding-bottom: 12px;
           }
@@ -180,7 +160,8 @@ export const buildDyehouseOrderPrintHtml = (payload: DyehouseOrderPrintPayload) 
             padding: 10px 12px;
             background: #faf7f1;
           }
-          .pattern-kicker {
+          .pattern-kicker,
+          .label {
             font-size: 11px;
             text-transform: uppercase;
             letter-spacing: 0.12em;
@@ -208,28 +189,6 @@ export const buildDyehouseOrderPrintHtml = (payload: DyehouseOrderPrintPayload) 
             text-transform: uppercase;
             letter-spacing: 0.05em;
           }
-          .details {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
-          }
-          .detail-item {
-            border: 1px solid #dcc4a4;
-            border-radius: 12px;
-            padding: 10px 12px;
-            background: #faf7f1;
-          }
-          .detail-label {
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: #7a6b58;
-            margin-bottom: 6px;
-          }
-          .detail-value {
-            font-size: 14px;
-            font-weight: 600;
-          }
           .notes {
             border: 1px solid #dcc4a4;
             border-radius: 12px;
@@ -247,8 +206,8 @@ export const buildDyehouseOrderPrintHtml = (payload: DyehouseOrderPrintPayload) 
           <div class="topbar">
             <div>
               <div class="brand">${companyTitle}</div>
-              <div class="sheet-title">${title}</div>
-              <div class="subtitle">${attentionLine}</div>
+              <div class="sheet-title">${orderTitle}</div>
+              <div class="subtitle">${customerName}</div>
             </div>
             <div class="datebox">
               <div>Tarih</div>
@@ -256,7 +215,6 @@ export const buildDyehouseOrderPrintHtml = (payload: DyehouseOrderPrintPayload) 
             </div>
           </div>
           ${blockHtml}
-          ${detailRows ? `<div class="details">${detailRows}</div>` : ""}
           ${noteBlock}
         </div>
       </body>
@@ -264,62 +222,5 @@ export const buildDyehouseOrderPrintHtml = (payload: DyehouseOrderPrintPayload) 
   `;
 };
 
-export const printHtmlInHiddenFrame = async (html: string, frameKey: string) => {
-  if (typeof window === "undefined") {
-    throw new Error("Yazdirma sadece tarayicida kullanilabilir.");
-  }
-
-  const existingFrame = document.querySelector<HTMLIFrameElement>(
-    `iframe[data-print-frame="${frameKey}"]`
-  );
-  existingFrame?.remove();
-
-  await new Promise<void>((resolve) => {
-    const iframe = document.createElement("iframe");
-    iframe.setAttribute("data-print-frame", frameKey);
-    iframe.setAttribute("title", `${frameKey}-print`);
-    iframe.style.position = "fixed";
-    iframe.style.right = "0";
-    iframe.style.bottom = "0";
-    iframe.style.width = "1px";
-    iframe.style.height = "1px";
-    iframe.style.opacity = "0";
-    iframe.style.pointerEvents = "none";
-    iframe.style.border = "0";
-    iframe.style.visibility = "hidden";
-    document.body.appendChild(iframe);
-
-    const frameWindow = iframe.contentWindow;
-    if (!frameWindow) {
-      iframe.remove();
-      throw new Error("Yazdirma iframe'i olusturulamadi.");
-    }
-
-    const triggerPrint = () => {
-      iframe.onload = null;
-      frameWindow.focus();
-      window.setTimeout(() => {
-        frameWindow.print();
-        resolve();
-      }, 180);
-    };
-
-    iframe.onload = () => {
-      window.setTimeout(triggerPrint, 120);
-    };
-
-    const doc = frameWindow.document;
-    doc.open();
-    doc.write(html);
-    doc.close();
-
-    window.setTimeout(triggerPrint, 600);
-
-    window.setTimeout(() => {
-      iframe.remove();
-    }, 3000);
-  });
-};
-
-export const printDyehouseOrderHtml = async (html: string) =>
-  printHtmlInHiddenFrame(html, "dyehouse-order");
+export const printCustomerOrderHtml = async (html: string) =>
+  printHtmlInHiddenFrame(html, "customer-order");

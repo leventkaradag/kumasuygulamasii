@@ -2,6 +2,8 @@
 
 import type {
   CustomerOrder,
+  CustomerOrderLine,
+  CustomerOrderPatternBlock,
   DyehouseOrder,
   DyehouseOrderDetails,
   DyehouseOrderLine,
@@ -17,11 +19,14 @@ type SaveCustomerOrderInput = {
   id?: string;
   orderDate: string;
   customerName: string;
-  patternName: string;
-  variant?: string;
-  topCount: number;
-  meters: number;
-  note?: string;
+  orderTitle?: string;
+  generalNote?: string;
+  patternBlocks: Array<{
+    id?: string;
+    patternCode?: string;
+    patternName?: string;
+    lines: Array<Partial<CustomerOrderLine>>;
+  }>;
 };
 
 type SaveDyehouseOrderInput = {
@@ -86,10 +91,24 @@ const toIsoDate = (value: string, label: string) => {
     throw new Error(`${label} gerekli.`);
   }
 
-  const source = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
-    ? `${trimmed}T00:00:00.000`
-    : trimmed;
-  const parsed = new Date(source);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const [yearText, monthText, dayText] = trimmed.split("-");
+    const year = Number(yearText);
+    const month = Number(monthText);
+    const day = Number(dayText);
+    const parsed = new Date(year, month - 1, day);
+    if (
+      Number.isNaN(parsed.getTime()) ||
+      parsed.getFullYear() !== year ||
+      parsed.getMonth() !== month - 1 ||
+      parsed.getDate() !== day
+    ) {
+      throw new Error(`${label} gecersiz.`);
+    }
+    return trimmed;
+  }
+
+  const parsed = new Date(trimmed);
   if (Number.isNaN(parsed.getTime())) {
     throw new Error(`${label} gecersiz.`);
   }
@@ -99,22 +118,6 @@ const toIsoDate = (value: string, label: string) => {
 const toTimestamp = (value: string) => {
   const parsed = new Date(value).getTime();
   return Number.isNaN(parsed) ? 0 : parsed;
-};
-
-const normalizePositiveNumber = (value: number, label: string) => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric <= 0) {
-    throw new Error(`${label} 0'dan buyuk olmali.`);
-  }
-  return numeric;
-};
-
-const normalizePositiveInteger = (value: number, label: string) => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || !Number.isInteger(numeric) || numeric <= 0) {
-    throw new Error(`${label} pozitif tam sayi olmali.`);
-  }
-  return numeric;
 };
 
 const normalizeOptionalPositiveNumber = (value: unknown) => {
@@ -133,25 +136,124 @@ const normalizeOptionalPositiveInteger = (value: unknown) => {
   return numeric;
 };
 
-const normalizeStoredCustomerOrder = (input: unknown): CustomerOrder | null => {
+const normalizeStoredCustomerOrderLine = (
+  input: unknown,
+  fallbackSequence: number
+): CustomerOrderLine | null => {
   if (!input || typeof input !== "object") return null;
-  const raw = input as Partial<CustomerOrder>;
+  const raw = input as Partial<CustomerOrderLine>;
 
-  const customerName = normalizeText(raw.customerName);
-  const patternName = normalizeText(raw.patternName);
-  if (!customerName || !patternName) return null;
-
-  const topCount =
-    typeof raw.topCount === "number" && Number.isFinite(raw.topCount)
-      ? raw.topCount
-      : Number(raw.topCount);
   const meters =
     typeof raw.meters === "number" && Number.isFinite(raw.meters)
       ? raw.meters
       : Number(raw.meters);
-  if (!Number.isFinite(topCount) || topCount <= 0 || !Number.isFinite(meters) || meters <= 0) {
-    return null;
-  }
+  const colorName = normalizeText(raw.colorName);
+  const topCount = normalizeOptionalPositiveInteger(raw.topCount);
+  const normalizedMeters = Number.isFinite(meters) && meters > 0 ? meters : undefined;
+  if (!colorName || (topCount === undefined && normalizedMeters === undefined)) return null;
+
+  const sequence =
+    typeof raw.sequence === "number" && Number.isFinite(raw.sequence) && raw.sequence > 0
+      ? Math.trunc(raw.sequence)
+      : fallbackSequence;
+
+  return {
+    id: normalizeText(raw.id) ?? createId(),
+    sequence,
+    colorName,
+    colorCode: normalizeText(raw.colorCode),
+    variantDescription: normalizeText(raw.variantDescription),
+    topCount,
+    meters: normalizedMeters,
+    status: normalizeText(raw.status),
+    note: normalizeText(raw.note),
+  };
+};
+
+const normalizeStoredCustomerPatternBlock = (
+  input: unknown,
+  fallbackSequence: number
+): CustomerOrderPatternBlock | null => {
+  if (!input || typeof input !== "object") return null;
+  const raw = input as Partial<CustomerOrderPatternBlock> & { lines?: unknown };
+
+  const lines = Array.isArray(raw.lines)
+    ? raw.lines
+        .map((line, index) => normalizeStoredCustomerOrderLine(line, index + 1))
+        .filter((line): line is CustomerOrderLine => line !== null)
+    : [];
+  if (!lines.length) return null;
+
+  const sequence =
+    typeof raw.sequence === "number" && Number.isFinite(raw.sequence) && raw.sequence > 0
+      ? Math.trunc(raw.sequence)
+      : fallbackSequence;
+
+  return {
+    id: normalizeText(raw.id) ?? createId(),
+    sequence,
+    patternCode: normalizeText(raw.patternCode),
+    patternName: normalizeText(raw.patternName),
+    lines,
+  };
+};
+
+const buildLegacyCustomerPatternBlocks = (
+  input: Partial<{
+    patternName: unknown;
+    variant: unknown;
+    topCount: unknown;
+    meters: unknown;
+    note: unknown;
+  }>
+): CustomerOrderPatternBlock[] => {
+  const patternName = normalizeText(
+    typeof input.patternName === "string" ? input.patternName : undefined
+  );
+  const topCount = normalizeOptionalPositiveInteger(input.topCount);
+  const meters = normalizeOptionalPositiveNumber(input.meters);
+  if (!patternName || (topCount === undefined && meters === undefined)) return [];
+
+  return [
+    {
+      id: createId(),
+      sequence: 1,
+      patternName,
+      lines: [
+        {
+          id: createId(),
+          sequence: 1,
+          colorName:
+            normalizeText(typeof input.variant === "string" ? input.variant : undefined) ?? "Genel",
+          topCount,
+          meters,
+          note: normalizeText(typeof input.note === "string" ? input.note : undefined),
+        },
+      ],
+    },
+  ];
+};
+
+const normalizeStoredCustomerOrder = (input: unknown): CustomerOrder | null => {
+  if (!input || typeof input !== "object") return null;
+  const raw = input as Partial<CustomerOrder> & {
+    patternBlocks?: unknown;
+    patternName?: unknown;
+    variant?: unknown;
+    topCount?: unknown;
+    meters?: unknown;
+    note?: unknown;
+  };
+
+  const customerName = normalizeText(raw.customerName);
+  if (!customerName) return null;
+
+  const patternBlocks = Array.isArray(raw.patternBlocks)
+    ? raw.patternBlocks
+        .map((block, index) => normalizeStoredCustomerPatternBlock(block, index + 1))
+        .filter((block): block is CustomerOrderPatternBlock => block !== null)
+    : buildLegacyCustomerPatternBlocks(raw);
+  if (!patternBlocks.length) return null;
 
   const orderDateRaw = normalizeText(raw.orderDate) ?? new Date().toISOString();
   const createdAtRaw = normalizeText(raw.createdAt) ?? new Date().toISOString();
@@ -163,11 +265,9 @@ const normalizeStoredCustomerOrder = (input: unknown): CustomerOrder | null => {
       ? new Date().toISOString()
       : new Date(orderDateRaw).toISOString(),
     customerName,
-    patternName,
-    variant: normalizeText(raw.variant),
-    topCount,
-    meters,
-    note: normalizeText(raw.note),
+    orderTitle: normalizeText(raw.orderTitle),
+    generalNote: normalizeText(raw.generalNote),
+    patternBlocks,
     createdAt: Number.isNaN(new Date(createdAtRaw).getTime())
       ? new Date().toISOString()
       : new Date(createdAtRaw).toISOString(),
@@ -391,6 +491,95 @@ const sortDyehouseOrders = (rows: DyehouseOrder[]) =>
 const sortOrderNotes = (rows: OrderNote[]) =>
   [...rows].sort((a, b) => toTimestamp(b.noteDate) - toTimestamp(a.noteDate));
 
+const normalizeCustomerLinesInput = (
+  inputRows: Array<Partial<CustomerOrderLine>>,
+  blockIndex: number
+): CustomerOrderLine[] => {
+  const meaningfulRows = inputRows.filter((row) => {
+    return Boolean(
+      normalizeText(row.colorName) ??
+        normalizeText(row.colorCode) ??
+        normalizeText(row.variantDescription) ??
+        normalizeText(row.status) ??
+        normalizeText(row.note) ??
+        normalizeOptionalPositiveInteger(row.topCount) ??
+        normalizeOptionalPositiveNumber(row.meters)
+    );
+  });
+
+  if (!meaningfulRows.length) {
+    throw new Error(`Desen ${blockIndex + 1} icin en az bir renk satiri gerekli.`);
+  }
+
+  return meaningfulRows.map((row, rowIndex) => {
+    const colorName = normalizeRequiredText(
+      row.colorName ?? "",
+      `Desen ${blockIndex + 1} / Satir ${rowIndex + 1} renk adi`
+    );
+    const topCount = normalizeOptionalPositiveInteger(row.topCount);
+    const meters = normalizeOptionalPositiveNumber(row.meters);
+    if (topCount === undefined && meters === undefined) {
+      throw new Error(
+        `Desen ${blockIndex + 1} / Satir ${rowIndex + 1} icin top veya metre girilmeli.`
+      );
+    }
+
+    return {
+      id: normalizeText(row.id) ?? createId(),
+      sequence: rowIndex + 1,
+      colorName,
+      colorCode: normalizeText(row.colorCode),
+      variantDescription: normalizeText(row.variantDescription),
+      topCount,
+      meters,
+      status: normalizeText(row.status),
+      note: normalizeText(row.note),
+    };
+  });
+};
+
+const normalizeCustomerPatternBlocksInput = (
+  inputBlocks: SaveCustomerOrderInput["patternBlocks"]
+): CustomerOrderPatternBlock[] => {
+  const meaningfulBlocks = inputBlocks.filter((block) => {
+    return Boolean(
+      normalizeText(block.patternCode) ??
+        normalizeText(block.patternName) ??
+        block.lines.some((line) =>
+          Boolean(
+            normalizeText(line.colorName) ??
+              normalizeText(line.colorCode) ??
+              normalizeText(line.variantDescription) ??
+              normalizeText(line.status) ??
+              normalizeText(line.note) ??
+              normalizeOptionalPositiveInteger(line.topCount) ??
+              normalizeOptionalPositiveNumber(line.meters)
+          )
+        )
+    );
+  });
+
+  if (!meaningfulBlocks.length) {
+    throw new Error("En az bir desen blogu gerekli.");
+  }
+
+  return meaningfulBlocks.map((block, blockIndex) => {
+    const patternCode = normalizeText(block.patternCode);
+    const patternName = normalizeText(block.patternName);
+    if (!patternCode && !patternName) {
+      throw new Error(`Desen ${blockIndex + 1} icin kod veya ad girilmeli.`);
+    }
+
+    return {
+      id: normalizeText(block.id) ?? createId(),
+      sequence: blockIndex + 1,
+      patternCode,
+      patternName,
+      lines: normalizeCustomerLinesInput(block.lines, blockIndex),
+    };
+  });
+};
+
 const normalizeDyehouseLinesInput = (
   inputRows: Array<Partial<DyehouseOrderLine>>,
   blockIndex: number
@@ -492,11 +681,9 @@ export const ordersLocalRepo = {
       id: current?.id ?? createId(),
       orderDate: toIsoDate(input.orderDate, "Tarih"),
       customerName: normalizeRequiredText(input.customerName, "Musteri"),
-      patternName: normalizeRequiredText(input.patternName, "Desen"),
-      variant: normalizeText(input.variant),
-      topCount: normalizePositiveInteger(input.topCount, "Top adedi"),
-      meters: normalizePositiveNumber(input.meters, "Metre"),
-      note: normalizeText(input.note),
+      orderTitle: normalizeText(input.orderTitle),
+      generalNote: normalizeText(input.generalNote),
+      patternBlocks: normalizeCustomerPatternBlocksInput(input.patternBlocks),
       createdAt: current?.createdAt ?? now,
       updatedAt: now,
     };

@@ -14,12 +14,18 @@ import { useMemo, useState, type FormEvent } from "react";
 
 import { cn } from "@/lib/cn";
 import {
+  buildCustomerOrderPrintHtml,
+  printCustomerOrderHtml,
+  type CustomerOrderPrintPayload,
+} from "@/lib/customerOrderPrint";
+import {
   buildDyehouseOrderPrintHtml,
   printDyehouseOrderHtml,
   type DyehouseOrderPrintPayload,
 } from "@/lib/dyehouseOrderPrint";
 import type {
   CustomerOrder,
+  CustomerOrderLine,
   DyehouseOrder,
   DyehouseOrderLine,
   OrderNote,
@@ -29,14 +35,30 @@ import Layout from "../components/Layout";
 
 type OrdersTab = "CUSTOMER" | "DYEHOUSE" | "NOTES";
 
+type CustomerOrderRowDraft = {
+  id: string;
+  colorName: string;
+  colorCode: string;
+  variantDescription: string;
+  topCount: string;
+  meters: string;
+  status: string;
+  note: string;
+};
+
+type CustomerPatternBlockDraft = {
+  id: string;
+  patternCode: string;
+  patternName: string;
+  rows: CustomerOrderRowDraft[];
+};
+
 type CustomerOrderForm = {
   orderDate: string;
   customerName: string;
-  patternName: string;
-  variant: string;
-  topCount: string;
-  meters: string;
-  note: string;
+  orderTitle: string;
+  generalNote: string;
+  patternBlocks: CustomerPatternBlockDraft[];
 };
 
 type DyehouseOrderRowDraft = {
@@ -89,7 +111,13 @@ const ORDER_TABS: Array<{ id: OrdersTab; label: string; icon: typeof ClipboardLi
   { id: "NOTES", label: "Siparis Yeri", icon: NotebookPen },
 ];
 
-const todayDate = () => new Date().toISOString().slice(0, 10);
+const todayDate = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
 
 const createDraftId = () => {
   const randomUUID = globalThis.crypto?.randomUUID;
@@ -102,14 +130,26 @@ const createDraftId = () => {
 const fmt = (value: number) => value.toLocaleString("tr-TR", { maximumFractionDigits: 2 });
 const normalizeQuery = (value: string) => value.trim().toLocaleLowerCase("tr-TR");
 
+const toDateInputParts = (value: Date) => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
 const toInputDate = (value: string) => {
+  const trimmed = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return todayDate();
-  return parsed.toISOString().slice(0, 10);
+  return toDateInputParts(parsed);
 };
 
 const formatDate = (value: string) => {
-  const parsed = new Date(value);
+  const trimmed = value.trim();
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? new Date(`${trimmed}T12:00:00`)
+    : new Date(value);
   if (Number.isNaN(parsed.getTime())) return "-";
   return parsed.toLocaleDateString("tr-TR", {
     day: "2-digit",
@@ -132,22 +172,37 @@ const toPositiveInteger = (value: string) => {
   return numeric;
 };
 
-const matchesDateFilters = (value: string, exact: string, from: string, to: string) => {
+const matchesDateFilters = (value: string, from: string, to: string) => {
   const normalizedValue = toInputDate(value);
-  if (exact && normalizedValue !== exact) return false;
   if (from && normalizedValue < from) return false;
   if (to && normalizedValue > to) return false;
   return true;
 };
 
+const createEmptyCustomerRow = (): CustomerOrderRowDraft => ({
+  id: createDraftId(),
+  colorName: "",
+  colorCode: "",
+  variantDescription: "",
+  topCount: "",
+  meters: "",
+  status: "",
+  note: "",
+});
+
+const createEmptyCustomerPatternBlock = (): CustomerPatternBlockDraft => ({
+  id: createDraftId(),
+  patternCode: "",
+  patternName: "",
+  rows: [createEmptyCustomerRow()],
+});
+
 const createEmptyCustomerForm = (date = todayDate()): CustomerOrderForm => ({
   orderDate: date,
   customerName: "",
-  patternName: "",
-  variant: "",
-  topCount: "",
-  meters: "",
-  note: "",
+  orderTitle: "",
+  generalNote: "",
+  patternBlocks: [createEmptyCustomerPatternBlock()],
 });
 
 const createEmptyDyehouseRow = (): DyehouseOrderRowDraft => ({
@@ -192,11 +247,23 @@ const createEmptyNoteForm = (date = todayDate()): OrderNoteForm => ({
 const mapCustomerOrderToForm = (order: CustomerOrder): CustomerOrderForm => ({
   orderDate: toInputDate(order.orderDate),
   customerName: order.customerName,
-  patternName: order.patternName,
-  variant: order.variant ?? "",
-  topCount: String(order.topCount),
-  meters: String(order.meters),
-  note: order.note ?? "",
+  orderTitle: order.orderTitle ?? "",
+  generalNote: order.generalNote ?? "",
+  patternBlocks: order.patternBlocks.map((block) => ({
+    id: block.id,
+    patternCode: block.patternCode ?? "",
+    patternName: block.patternName ?? "",
+    rows: block.lines.map((row) => ({
+      id: row.id,
+      colorName: row.colorName,
+      colorCode: row.colorCode ?? "",
+      variantDescription: row.variantDescription ?? "",
+      topCount: row.topCount ? String(row.topCount) : "",
+      meters: row.meters ? String(row.meters) : "",
+      status: row.status ?? "",
+      note: row.note ?? "",
+    })),
+  })),
 });
 
 const mapDyehouseOrderToForm = (order: DyehouseOrder): DyehouseOrderForm => ({
@@ -233,6 +300,105 @@ const mapOrderNoteToForm = (note: OrderNote): OrderNoteForm => ({
   title: note.title,
   content: note.content,
 });
+
+const isMeaningfulCustomerRow = (row: CustomerOrderRowDraft) =>
+  Boolean(
+    row.colorName.trim() ||
+      row.colorCode.trim() ||
+      row.variantDescription.trim() ||
+      row.status.trim() ||
+      row.note.trim() ||
+      toPositiveInteger(row.topCount) ||
+      toPositiveNumber(row.meters)
+  );
+
+const isMeaningfulCustomerPatternBlock = (block: CustomerPatternBlockDraft) =>
+  Boolean(block.patternCode.trim() || block.patternName.trim() || block.rows.some(isMeaningfulCustomerRow));
+
+const buildCustomerPatternBlocksPayload = (
+  patternBlocks: CustomerPatternBlockDraft[]
+): Array<{
+  id?: string;
+  patternCode?: string;
+  patternName?: string;
+  lines: Array<Partial<CustomerOrderLine>>;
+}> =>
+  patternBlocks.map((block) => ({
+    id: block.id,
+    patternCode: block.patternCode,
+    patternName: block.patternName,
+    lines: block.rows.map((row) => ({
+      id: row.id,
+      colorName: row.colorName,
+      colorCode: row.colorCode,
+      variantDescription: row.variantDescription,
+      topCount: toPositiveInteger(row.topCount),
+      meters: toPositiveNumber(row.meters),
+      status: row.status,
+      note: row.note,
+    })),
+  }));
+
+const buildCustomerPrintPayload = (form: CustomerOrderForm): CustomerOrderPrintPayload => {
+  const customerName = form.customerName.trim();
+  if (!customerName) {
+    throw new Error("Yazdirma icin musteri adi gerekli.");
+  }
+
+  const meaningfulBlocks = form.patternBlocks.filter(isMeaningfulCustomerPatternBlock);
+  if (!meaningfulBlocks.length) {
+    throw new Error("Yazdirma icin en az bir desen blogu gerekli.");
+  }
+
+  const patternBlocks = meaningfulBlocks.map((block, blockIndex) => {
+    if (!block.patternCode.trim() && !block.patternName.trim()) {
+      throw new Error(`Desen ${blockIndex + 1} icin kod veya ad girilmeli.`);
+    }
+
+    const meaningfulRows = block.rows.filter(isMeaningfulCustomerRow);
+    if (!meaningfulRows.length) {
+      throw new Error(`Desen ${blockIndex + 1} icin en az bir renk satiri gerekli.`);
+    }
+
+    return {
+      sequence: blockIndex + 1,
+      patternCode: block.patternCode.trim() || undefined,
+      patternName: block.patternName.trim() || undefined,
+      rows: meaningfulRows.map((row, rowIndex) => {
+        const topCount = toPositiveInteger(row.topCount);
+        const meters = toPositiveNumber(row.meters);
+        if (!row.colorName.trim()) {
+          throw new Error(`Desen ${blockIndex + 1} / Satir ${rowIndex + 1} icin renk adi gerekli.`);
+        }
+        if (topCount === undefined && meters === undefined) {
+          throw new Error(
+            `Desen ${blockIndex + 1} / Satir ${rowIndex + 1} icin top veya metre gerekli.`
+          );
+        }
+
+        return {
+          sequence: rowIndex + 1,
+          colorName: row.colorName.trim(),
+          colorCode: row.colorCode.trim() || undefined,
+          variantDescription: row.variantDescription.trim() || undefined,
+          topCount,
+          meters,
+          status: row.status.trim() || undefined,
+          note: row.note.trim() || undefined,
+        };
+      }),
+    };
+  });
+
+  return {
+    companyTitle: "KUMASCI TEKSTIL",
+    customerName,
+    orderDate: form.orderDate || todayDate(),
+    orderTitle: form.orderTitle.trim() || undefined,
+    generalNote: form.generalNote.trim() || undefined,
+    patternBlocks,
+  };
+};
 
 const isMeaningfulDyehouseRow = (row: DyehouseOrderRowDraft) =>
   Boolean(
@@ -417,7 +583,6 @@ export default function Raporlar() {
   const [editingCustomerOrderId, setEditingCustomerOrderId] = useState<string | null>(null);
   const [customerForm, setCustomerForm] = useState<CustomerOrderForm>(() => createEmptyCustomerForm());
   const [customerQuery, setCustomerQuery] = useState("");
-  const [customerExactDate, setCustomerExactDate] = useState("");
   const [customerFromDate, setCustomerFromDate] = useState("");
   const [customerToDate, setCustomerToDate] = useState("");
   const [customerFeedback, setCustomerFeedback] = useState<FeedbackState | null>(null);
@@ -444,17 +609,33 @@ export default function Raporlar() {
   const filteredCustomerOrders = useMemo(() => {
     const normalizedQuery = normalizeQuery(customerQuery);
     return customerOrders.filter((order) => {
+      const searchableFields = [
+        order.customerName,
+        order.orderTitle ?? "",
+        order.generalNote ?? "",
+        ...order.patternBlocks.flatMap((block) => [
+          block.patternCode ?? "",
+          block.patternName ?? "",
+          ...block.lines.flatMap((line) => [
+            line.colorName,
+            line.colorCode ?? "",
+            line.variantDescription ?? "",
+            line.status ?? "",
+            line.note ?? "",
+          ]),
+        ]),
+      ];
       if (
         normalizedQuery &&
-        ![order.customerName, order.patternName, order.variant ?? "", order.note ?? ""].some((field) =>
+        !searchableFields.some((field) =>
           field.toLocaleLowerCase("tr-TR").includes(normalizedQuery)
         )
       ) {
         return false;
       }
-      return matchesDateFilters(order.orderDate, customerExactDate, customerFromDate, customerToDate);
+      return matchesDateFilters(order.orderDate, customerFromDate, customerToDate);
     });
-  }, [customerExactDate, customerFromDate, customerOrders, customerQuery, customerToDate]);
+  }, [customerFromDate, customerOrders, customerQuery, customerToDate]);
 
   const filteredDyehouseOrders = useMemo(() => {
     const normalizedQuery = normalizeQuery(dyehouseQuery);
@@ -501,11 +682,19 @@ export default function Raporlar() {
     () =>
       filteredCustomerOrders.reduce(
         (acc, order) => {
-          acc.topCount += order.topCount;
-          acc.meters += order.meters;
+          acc.patternCount += order.patternBlocks.length;
+          acc.rowCount += order.patternBlocks.reduce((sum, block) => sum + block.lines.length, 0);
+          acc.topCount += order.patternBlocks.reduce(
+            (sum, block) => sum + block.lines.reduce((lineSum, line) => lineSum + (line.topCount ?? 0), 0),
+            0
+          );
+          acc.meters += order.patternBlocks.reduce(
+            (sum, block) => sum + block.lines.reduce((lineSum, line) => lineSum + (line.meters ?? 0), 0),
+            0
+          );
           return acc;
         },
-        { topCount: 0, meters: 0 }
+        { patternCount: 0, rowCount: 0, topCount: 0, meters: 0 }
       ),
     [filteredCustomerOrders]
   );
@@ -540,19 +729,17 @@ export default function Raporlar() {
     event.preventDefault();
     setCustomerFeedback(null);
     try {
-      ordersLocalRepo.saveCustomerOrder({
+      const saved = ordersLocalRepo.saveCustomerOrder({
         id: editingCustomerOrderId ?? undefined,
         orderDate: customerForm.orderDate,
         customerName: customerForm.customerName,
-        patternName: customerForm.patternName,
-        variant: customerForm.variant,
-        topCount: Number(customerForm.topCount.trim().replace(",", ".")),
-        meters: Number(customerForm.meters.trim().replace(",", ".")),
-        note: customerForm.note,
+        orderTitle: customerForm.orderTitle,
+        generalNote: customerForm.generalNote,
+        patternBlocks: buildCustomerPatternBlocksPayload(customerForm.patternBlocks),
       });
       refreshAll();
-      setCustomerForm(createEmptyCustomerForm(customerForm.orderDate));
-      setEditingCustomerOrderId(null);
+      setEditingCustomerOrderId(saved.id);
+      setCustomerForm(mapCustomerOrderToForm(saved));
       setCustomerFeedback({ tone: "success", message: "Musteri siparisi kaydedildi." });
     } catch (error) {
       setCustomerFeedback({
@@ -578,6 +765,97 @@ export default function Raporlar() {
       setCustomerForm(createEmptyCustomerForm(customerForm.orderDate));
     }
     setCustomerFeedback({ tone: "success", message: "Musteri siparisi silindi." });
+  };
+
+  const handleCustomerPatternBlockChange = (
+    blockId: string,
+    field: keyof Pick<CustomerPatternBlockDraft, "patternCode" | "patternName">,
+    value: string
+  ) => {
+    setCustomerForm((current) => ({
+      ...current,
+      patternBlocks: current.patternBlocks.map((block) =>
+        block.id === blockId ? { ...block, [field]: value } : block
+      ),
+    }));
+  };
+
+  const handleCustomerRowChange = (
+    blockId: string,
+    rowId: string,
+    field: keyof CustomerOrderRowDraft,
+    value: string
+  ) => {
+    setCustomerForm((current) => ({
+      ...current,
+      patternBlocks: current.patternBlocks.map((block) =>
+        block.id !== blockId
+          ? block
+          : {
+              ...block,
+              rows: block.rows.map((row) => (row.id === rowId ? { ...row, [field]: value } : row)),
+            }
+      ),
+    }));
+  };
+
+  const handleAddCustomerPatternBlock = () => {
+    setCustomerForm((current) => ({
+      ...current,
+      patternBlocks: [...current.patternBlocks, createEmptyCustomerPatternBlock()],
+    }));
+  };
+
+  const handleRemoveCustomerPatternBlock = (blockId: string) => {
+    setCustomerForm((current) => {
+      const nextBlocks = current.patternBlocks.filter((block) => block.id !== blockId);
+      return {
+        ...current,
+        patternBlocks: nextBlocks.length ? nextBlocks : [createEmptyCustomerPatternBlock()],
+      };
+    });
+  };
+
+  const handleAddCustomerRow = (blockId: string) => {
+    setCustomerForm((current) => ({
+      ...current,
+      patternBlocks: current.patternBlocks.map((block) =>
+        block.id === blockId ? { ...block, rows: [...block.rows, createEmptyCustomerRow()] } : block
+      ),
+    }));
+  };
+
+  const handleRemoveCustomerRow = (blockId: string, rowId: string) => {
+    setCustomerForm((current) => ({
+      ...current,
+      patternBlocks: current.patternBlocks.map((block) => {
+        if (block.id !== blockId) return block;
+        const nextRows = block.rows.filter((row) => row.id !== rowId);
+        return {
+          ...block,
+          rows: nextRows.length ? nextRows : [createEmptyCustomerRow()],
+        };
+      }),
+    }));
+  };
+
+  const handleResetCustomerOrder = () => {
+    setEditingCustomerOrderId(null);
+    setCustomerForm(createEmptyCustomerForm(customerForm.orderDate));
+    setCustomerFeedback(null);
+  };
+
+  const handlePrintCustomerOrder = async () => {
+    setCustomerFeedback(null);
+    try {
+      const html = buildCustomerOrderPrintHtml(buildCustomerPrintPayload(customerForm));
+      await printCustomerOrderHtml(html);
+    } catch (error) {
+      setCustomerFeedback({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Yazdirma hazirlanamadi.",
+      });
+    }
   };
 
   const handleDyehousePatternBlockChange = (
@@ -773,7 +1051,18 @@ export default function Raporlar() {
           <MetricCard
             label="Musteri Siparisleri"
             value={String(customerOrders.length)}
-            detail={`${fmt(customerOrders.reduce((sum, order) => sum + order.meters, 0))} m toplam siparis`}
+            detail={`${fmt(
+              customerOrders.reduce(
+                (sum, order) =>
+                  sum +
+                  order.patternBlocks.reduce(
+                    (blockSum, block) =>
+                      blockSum + block.lines.reduce((lineSum, line) => lineSum + (line.meters ?? 0), 0),
+                    0
+                  ),
+                0
+              )
+            )} m toplam siparis`}
           />
           <MetricCard
             label="Boyahane Taslaklari"
@@ -811,14 +1100,148 @@ export default function Raporlar() {
         </div>
 
         {activeTab === "CUSTOMER" ? (
-          <div className="grid min-h-0 gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+          <div className="grid min-h-0 gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
             <SectionCard
-              title={editingCustomerOrderId ? "Musteri Siparisini Duzenle" : "Yeni Musteri Siparisi"}
-              subtitle="Tarih korunur, kalan alanlar hizli giris icin kayit sonrasi temizlenir."
+              title="Kayitli Musteri Siparisleri"
+              subtitle="Musteri, referans, desen ve renk seviyesinde arayip secerek tum siparisi tekrar acabilirsiniz."
+              className="flex min-h-0 flex-col"
             >
-              <form className="space-y-4" onSubmit={handleCustomerSubmit}>
+              <div className="space-y-3">
+                <label className="relative block">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+                  <input
+                    type="search"
+                    value={customerQuery}
+                    onChange={(event) => setCustomerQuery(event.target.value)}
+                    placeholder="Musteri, referans, desen, renk, kod..."
+                    className="w-full rounded-2xl border border-black/10 bg-white px-10 py-2.5 text-sm text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
+                  />
+                </label>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <label className="space-y-2 text-sm font-medium text-neutral-700">
+                    <span>Baslangic Tarihi</span>
+                    <input
+                      type="date"
+                      value={customerFromDate}
+                      onChange={(event) => setCustomerFromDate(event.target.value)}
+                      className="w-full rounded-2xl border border-black/10 bg-white px-3 py-2.5 text-sm text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
+                    />
+                  </label>
+                  <label className="space-y-2 text-sm font-medium text-neutral-700">
+                    <span>Bitis Tarihi</span>
+                    <input
+                      type="date"
+                      value={customerToDate}
+                      onChange={(event) => setCustomerToDate(event.target.value)}
+                      className="w-full rounded-2xl border border-black/10 bg-white px-3 py-2.5 text-sm text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
+                    />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomerQuery("");
+                    setCustomerFromDate("");
+                    setCustomerToDate("");
+                  }}
+                  className="w-full rounded-full border border-black/10 bg-white px-4 py-2.5 text-sm font-semibold text-neutral-700 transition hover:border-black/20"
+                >
+                  Filtreleri Temizle
+                </button>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                <MetricCard
+                  label="Filtreli Siparis"
+                  value={String(filteredCustomerOrders.length)}
+                  detail={`${customerTotals.patternCount} desen, ${customerTotals.rowCount} renk satiri`}
+                />
+                <MetricCard
+                  label="Top / Metre"
+                  value={`${customerTotals.topCount} top`}
+                  detail={`${fmt(customerTotals.meters)} m toplam`}
+                />
+              </div>
+
+              <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+                {filteredCustomerOrders.length ? (
+                  <div className="space-y-3">
+                    {filteredCustomerOrders.map((order) => {
+                      const isActive = editingCustomerOrderId === order.id;
+                      const topTotal = order.patternBlocks.reduce(
+                        (sum, block) => sum + block.lines.reduce((lineSum, line) => lineSum + (line.topCount ?? 0), 0),
+                        0
+                      );
+                      const meterTotal = order.patternBlocks.reduce(
+                        (sum, block) => sum + block.lines.reduce((lineSum, line) => lineSum + (line.meters ?? 0), 0),
+                        0
+                      );
+                      const colorCount = order.patternBlocks.reduce((sum, block) => sum + block.lines.length, 0);
+                      const patternSummary = order.patternBlocks
+                        .map((block) => block.patternCode || block.patternName || `Desen ${block.sequence}`)
+                        .slice(0, 2)
+                        .join(", ");
+
+                      return (
+                        <div
+                          key={order.id}
+                          className={cn(
+                            "rounded-[22px] border p-4 transition",
+                            isActive ? "border-coffee-primary/40 bg-coffee-primary/10" : "border-black/5 bg-white/80"
+                          )}
+                        >
+                          <div className="text-xs uppercase tracking-[0.18em] text-neutral-500">
+                            {formatDate(order.orderDate)}
+                          </div>
+                          <div className="mt-2 text-base font-semibold text-neutral-900">{order.customerName}</div>
+                          <div className="mt-1 text-sm text-neutral-600">
+                            {order.orderTitle || "Referanssiz musteri siparisi"}
+                          </div>
+                          <div className="mt-1 text-xs text-neutral-500">{patternSummary || "-"}</div>
+                          <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-neutral-600">
+                            <div>{order.patternBlocks.length} desen</div>
+                            <div>{colorCount} renk</div>
+                            <div>{topTotal} top</div>
+                            <div>{fmt(meterTotal)} m</div>
+                          </div>
+                          <div className="mt-3 flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleEditCustomerOrder(order)}
+                              className="rounded-full border border-black/10 px-3 py-1.5 text-xs font-semibold text-neutral-700 transition hover:border-black/20"
+                            >
+                              Ac / Duzenle
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteCustomerOrder(order.id)}
+                              className="rounded-full border border-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-50"
+                            >
+                              Sil
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <EmptyState
+                    title="Musteri siparisi bulunamadi"
+                    description="Filtreleri gevseterek veya sagdaki calisma sayfasindan yeni siparis olusturarak listeyi doldurabilirsiniz."
+                  />
+                )}
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title="Musteri Calisma Sayfasi"
+              subtitle="Ayni musteri siparisinde coklu desen ve her desen altinda coklu renk satiri yonetin; kaydedip tablo halinde yazdirin."
+              className="flex min-h-0 flex-col"
+            >
+              <form className="flex min-h-0 flex-1 flex-col gap-4" onSubmit={handleCustomerSubmit}>
                 <FeedbackBanner feedback={customerFeedback} />
-                <div className="grid gap-4 sm:grid-cols-2">
+
+                <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)_minmax(0,1fr)]">
                   <label className="space-y-2 text-sm font-medium text-neutral-700">
                     <span>Tarih</span>
                     <input
@@ -838,179 +1261,247 @@ export default function Raporlar() {
                       className="w-full rounded-2xl border border-black/10 bg-white px-3 py-2.5 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
                     />
                   </label>
-                  <label className="space-y-2 text-sm font-medium text-neutral-700 sm:col-span-2">
-                    <span>Desen Ismi / Kodu</span>
+                  <label className="space-y-2 text-sm font-medium text-neutral-700">
+                    <span>Siparis Basligi / Referans No</span>
                     <input
                       type="text"
-                      value={customerForm.patternName}
-                      onChange={(event) => setCustomerForm((current) => ({ ...current, patternName: event.target.value }))}
-                      placeholder="Desen kodu veya adi"
-                      className="w-full rounded-2xl border border-black/10 bg-white px-3 py-2.5 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
-                    />
-                  </label>
-                  <label className="space-y-2 text-sm font-medium text-neutral-700">
-                    <span>Varyant</span>
-                    <input
-                      type="text"
-                      value={customerForm.variant}
-                      onChange={(event) => setCustomerForm((current) => ({ ...current, variant: event.target.value }))}
-                      placeholder="Opsiyonel"
-                      className="w-full rounded-2xl border border-black/10 bg-white px-3 py-2.5 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
-                    />
-                  </label>
-                  <label className="space-y-2 text-sm font-medium text-neutral-700">
-                    <span>Top Adeti</span>
-                    <input
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={customerForm.topCount}
-                      onChange={(event) => setCustomerForm((current) => ({ ...current, topCount: event.target.value }))}
-                      placeholder="0"
-                      className="w-full rounded-2xl border border-black/10 bg-white px-3 py-2.5 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
-                    />
-                  </label>
-                  <label className="space-y-2 text-sm font-medium text-neutral-700 sm:col-span-2">
-                    <span>Metre</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={customerForm.meters}
-                      onChange={(event) => setCustomerForm((current) => ({ ...current, meters: event.target.value }))}
-                      placeholder="0"
-                      className="w-full rounded-2xl border border-black/10 bg-white px-3 py-2.5 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
-                    />
-                  </label>
-                  <label className="space-y-2 text-sm font-medium text-neutral-700 sm:col-span-2">
-                    <span>Not</span>
-                    <textarea
-                      rows={4}
-                      value={customerForm.note}
-                      onChange={(event) => setCustomerForm((current) => ({ ...current, note: event.target.value }))}
-                      placeholder="Opsiyonel siparis notu"
+                      value={customerForm.orderTitle}
+                      onChange={(event) => setCustomerForm((current) => ({ ...current, orderTitle: event.target.value }))}
+                      placeholder="Orn. 2026 Ilk Yukleme"
                       className="w-full rounded-2xl border border-black/10 bg-white px-3 py-2.5 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
                     />
                   </label>
                 </div>
-                <div className="flex flex-wrap gap-3">
+
+                <div className="rounded-[24px] border border-black/5 bg-[#fffaf4] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Desen Bloklari</div>
+                      <div className="mt-1 text-sm text-neutral-600">
+                        Her deseni kendi blogunda acin; altinda renk, kod, top ve metre satirlarini ayri takip edin.
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleAddCustomerPatternBlock}
+                      className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold text-neutral-700 transition hover:border-black/20"
+                    >
+                      <Plus className="h-4 w-4" aria-hidden />
+                      Desen Ekle
+                    </button>
+                  </div>
+
+                  <div className="space-y-4">
+                    {customerForm.patternBlocks.map((block, blockIndex) => (
+                      <div
+                        key={block.id}
+                        className="rounded-[22px] border border-black/5 bg-white p-4 shadow-[0_8px_18px_rgba(0,0,0,0.04)]"
+                      >
+                        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                          <div className="grid min-w-0 flex-1 gap-3 md:grid-cols-2">
+                            <label className="space-y-2 text-sm font-medium text-neutral-700">
+                              <span>Desen Kodu</span>
+                              <input
+                                type="text"
+                                value={block.patternCode}
+                                onChange={(event) =>
+                                  handleCustomerPatternBlockChange(block.id, "patternCode", event.target.value)
+                                }
+                                placeholder={`Orn. C-${blockIndex + 1}`}
+                                className="w-full rounded-2xl border border-black/10 bg-white px-3 py-2.5 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
+                              />
+                            </label>
+                            <label className="space-y-2 text-sm font-medium text-neutral-700">
+                              <span>Desen Adi</span>
+                              <input
+                                type="text"
+                                value={block.patternName}
+                                onChange={(event) =>
+                                  handleCustomerPatternBlockChange(block.id, "patternName", event.target.value)
+                                }
+                                placeholder="Desen adi"
+                                className="w-full rounded-2xl border border-black/10 bg-white px-3 py-2.5 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
+                              />
+                            </label>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveCustomerPatternBlock(block.id)}
+                            className="inline-flex items-center gap-1 rounded-full border border-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-50"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                            Deseni Sil
+                          </button>
+                        </div>
+
+                        <div className="overflow-x-auto rounded-[18px] border border-black/5 bg-white">
+                          <table className="w-full min-w-[1180px] border-collapse text-sm">
+                            <thead className="bg-[#f3e7d7] text-left text-[11px] uppercase tracking-[0.18em] text-neutral-600">
+                              <tr>
+                                <th className="px-3 py-3">Sira</th>
+                                <th className="px-3 py-3">Renk Adi</th>
+                                <th className="px-3 py-3">Renk Kodu</th>
+                                <th className="px-3 py-3">Varyant / Aciklama</th>
+                                <th className="px-3 py-3">Top</th>
+                                <th className="px-3 py-3">Metre</th>
+                                <th className="px-3 py-3">Durum</th>
+                                <th className="px-3 py-3">Not</th>
+                                <th className="px-3 py-3">Islem</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {block.rows.map((row, rowIndex) => (
+                                <tr key={row.id} className="border-t border-black/5 align-top">
+                                  <td className="px-3 py-2 text-neutral-500">{rowIndex + 1}</td>
+                                  <td className="px-3 py-2">
+                                    <input
+                                      type="text"
+                                      value={row.colorName}
+                                      onChange={(event) =>
+                                        handleCustomerRowChange(block.id, row.id, "colorName", event.target.value)
+                                      }
+                                      className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/20"
+                                      placeholder="Renk"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <input
+                                      type="text"
+                                      value={row.colorCode}
+                                      onChange={(event) =>
+                                        handleCustomerRowChange(block.id, row.id, "colorCode", event.target.value)
+                                      }
+                                      className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/20"
+                                      placeholder="Kod"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <input
+                                      type="text"
+                                      value={row.variantDescription}
+                                      onChange={(event) =>
+                                        handleCustomerRowChange(block.id, row.id, "variantDescription", event.target.value)
+                                      }
+                                      className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/20"
+                                      placeholder="Varyant veya aciklama"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="1"
+                                      value={row.topCount}
+                                      onChange={(event) =>
+                                        handleCustomerRowChange(block.id, row.id, "topCount", event.target.value)
+                                      }
+                                      className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/20"
+                                      placeholder="0"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="0.01"
+                                      value={row.meters}
+                                      onChange={(event) =>
+                                        handleCustomerRowChange(block.id, row.id, "meters", event.target.value)
+                                      }
+                                      className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/20"
+                                      placeholder="0"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <input
+                                      type="text"
+                                      value={row.status}
+                                      onChange={(event) =>
+                                        handleCustomerRowChange(block.id, row.id, "status", event.target.value)
+                                      }
+                                      className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/20"
+                                      placeholder="Durum"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <input
+                                      type="text"
+                                      value={row.note}
+                                      onChange={(event) =>
+                                        handleCustomerRowChange(block.id, row.id, "note", event.target.value)
+                                      }
+                                      className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/20"
+                                      placeholder="Opsiyonel"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveCustomerRow(block.id, row.id)}
+                                      className="inline-flex items-center gap-1 rounded-full border border-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-50"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                                      Sil
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        <div className="mt-4 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => handleAddCustomerRow(block.id)}
+                            className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold text-neutral-700 transition hover:border-black/20"
+                          >
+                            <Plus className="h-4 w-4" aria-hidden />
+                            Satir Ekle
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <label className="space-y-2 text-sm font-medium text-neutral-700">
+                  <span>Genel Not</span>
+                  <textarea
+                    rows={4}
+                    value={customerForm.generalNote}
+                    onChange={(event) => setCustomerForm((current) => ({ ...current, generalNote: event.target.value }))}
+                    placeholder="Siparis genel aciklamasi, notlar, teslim veya calisma bilgileri..."
+                    className="w-full rounded-2xl border border-black/10 bg-white px-3 py-2.5 text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
+                  />
+                </label>
+
+                <div className="flex flex-wrap gap-3 border-t border-black/5 pt-4">
                   <button
                     type="submit"
                     className="rounded-full bg-coffee-primary px-5 py-2.5 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(0,0,0,0.14)] transition hover:-translate-y-0.5"
                   >
-                    {editingCustomerOrderId ? "Guncelle" : "Kaydet"}
+                    {editingCustomerOrderId ? "Siparisi Guncelle" : "Siparisi Kaydet"}
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setEditingCustomerOrderId(null);
-                      setCustomerForm(createEmptyCustomerForm(customerForm.orderDate));
-                      setCustomerFeedback(null);
-                    }}
-                    className="rounded-full border border-black/10 bg-white px-5 py-2.5 text-sm font-semibold text-neutral-700 transition hover:border-black/20"
+                    onClick={handlePrintCustomerOrder}
+                    className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white px-5 py-2.5 text-sm font-semibold text-neutral-700 transition hover:border-black/20"
                   >
-                    Formu Temizle
+                    <Printer className="h-4 w-4" aria-hidden />
+                    Tabloyu Yazdir
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetCustomerOrder}
+                    className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white px-5 py-2.5 text-sm font-semibold text-neutral-700 transition hover:border-black/20"
+                  >
+                    <RotateCcw className="h-4 w-4" aria-hidden />
+                    Yeni Siparis
                   </button>
                 </div>
               </form>
             </SectionCard>
-
-            <div className="flex min-h-0 flex-col gap-4">
-              <SectionCard
-                title="Arama ve Liste"
-                subtitle="Musteri metni, tek tarih ve tarih araligi birlikte filtrelenebilir."
-              >
-                <div className="grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_repeat(3,minmax(0,0.7fr))]">
-                  <label className="relative block">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
-                    <input
-                      type="search"
-                      value={customerQuery}
-                      onChange={(event) => setCustomerQuery(event.target.value)}
-                      placeholder="Musteri, desen, varyant..."
-                      className="w-full rounded-2xl border border-black/10 bg-white px-10 py-2.5 text-sm text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
-                    />
-                  </label>
-                  <input
-                    type="date"
-                    value={customerExactDate}
-                    onChange={(event) => setCustomerExactDate(event.target.value)}
-                    className="w-full rounded-2xl border border-black/10 bg-white px-3 py-2.5 text-sm text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
-                  />
-                  <input
-                    type="date"
-                    value={customerFromDate}
-                    onChange={(event) => setCustomerFromDate(event.target.value)}
-                    className="w-full rounded-2xl border border-black/10 bg-white px-3 py-2.5 text-sm text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
-                  />
-                  <input
-                    type="date"
-                    value={customerToDate}
-                    onChange={(event) => setCustomerToDate(event.target.value)}
-                    className="w-full rounded-2xl border border-black/10 bg-white px-3 py-2.5 text-sm text-neutral-900 focus:border-coffee-primary focus:outline-none focus:ring-2 focus:ring-coffee-primary/30"
-                  />
-                </div>
-                <div className="mt-4 grid gap-3 md:grid-cols-3">
-                  <MetricCard label="Filtreli Siparis" value={String(filteredCustomerOrders.length)} detail="Aktif filtre sonucunda gorunen kayit" />
-                  <MetricCard label="Top Adedi" value={String(customerTotals.topCount)} detail="Liste icindeki toplam top" />
-                  <MetricCard label="Metre" value={`${fmt(customerTotals.meters)} m`} detail="Liste icindeki toplam siparis metresi" />
-                </div>
-              </SectionCard>
-
-              <SectionCard
-                title="Musteri Siparisleri"
-                subtitle="Kayitlar tarih bazli saklanir ve masaustunde tablo rahatliginda okunur."
-                className="flex min-h-0 flex-1 flex-col"
-              >
-                {filteredCustomerOrders.length ? (
-                  <div className="min-h-0 overflow-auto rounded-[20px] border border-black/5">
-                    <table className="w-full min-w-[920px] border-collapse text-sm">
-                      <thead className="sticky top-0 bg-[#f3e9db] text-left text-[11px] uppercase tracking-[0.18em] text-neutral-600">
-                        <tr>
-                          <th className="px-4 py-3">Tarih</th><th className="px-4 py-3">Musteri</th><th className="px-4 py-3">Desen</th><th className="px-4 py-3">Varyant</th><th className="px-4 py-3">Top</th><th className="px-4 py-3">Metre</th><th className="px-4 py-3">Not</th><th className="px-4 py-3">Islem</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredCustomerOrders.map((order) => (
-                          <tr key={order.id} className="border-t border-black/5 bg-white/80 align-top">
-                            <td className="px-4 py-3 text-neutral-700">{formatDate(order.orderDate)}</td>
-                            <td className="px-4 py-3 font-semibold text-neutral-900">{order.customerName}</td>
-                            <td className="px-4 py-3 text-neutral-700">{order.patternName}</td>
-                            <td className="px-4 py-3 text-neutral-700">{order.variant ?? "-"}</td>
-                            <td className="px-4 py-3 text-neutral-700">{order.topCount}</td>
-                            <td className="px-4 py-3 text-neutral-700">{fmt(order.meters)} m</td>
-                            <td className="px-4 py-3 text-neutral-600">{order.note ?? "-"}</td>
-                            <td className="px-4 py-3">
-                              <div className="flex gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => handleEditCustomerOrder(order)}
-                                  className="rounded-full border border-black/10 px-3 py-1.5 text-xs font-semibold text-neutral-700 transition hover:border-black/20"
-                                >
-                                  Duzenle
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteCustomerOrder(order.id)}
-                                  className="rounded-full border border-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-50"
-                                >
-                                  Sil
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <EmptyState
-                    title="Musteri siparisi bulunamadi"
-                    description="Filtreleri gevseterek veya yeni siparis ekleyerek listeyi doldurabilirsiniz."
-                  />
-                )}
-              </SectionCard>
-            </div>
           </div>
         ) : null}
         {activeTab === "DYEHOUSE" ? (

@@ -2,13 +2,31 @@ export type CustomerOrder = {
   id: string;
   orderDate: string;
   customerName: string;
-  patternName: string;
-  variant?: string;
-  topCount: number;
-  meters: number;
-  note?: string;
+  orderTitle?: string;
+  generalNote?: string;
+  patternBlocks: CustomerOrderPatternBlock[];
   createdAt: string;
   updatedAt: string;
+};
+
+export type CustomerOrderLine = {
+  id: string;
+  sequence: number;
+  colorName: string;
+  colorCode?: string;
+  variantDescription?: string;
+  topCount?: number;
+  meters?: number;
+  status?: string;
+  note?: string;
+};
+
+export type CustomerOrderPatternBlock = {
+  id: string;
+  sequence: number;
+  patternCode?: string;
+  patternName?: string;
+  lines: CustomerOrderLine[];
 };
 
 export type DyehouseOrderLine = {
