@@ -150,6 +150,10 @@ export default function Layout({ title, description = undefined, children }) {
         >
           <div className="h-full min-h-0 overflow-hidden">{children}</div>
         </section>
+
+        <footer className="mt-4 px-2 text-center text-[11px] text-neutral-500 sm:text-right">
+          Designed & developed by Ömer Levent Karadağ
+        </footer>
       </main>
     </div>
   );
