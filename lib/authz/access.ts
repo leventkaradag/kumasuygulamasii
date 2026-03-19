@@ -307,7 +307,7 @@ const menuItems: AppMenuItem[] = [
   {
     key: 'raporlar',
     href: '/raporlar',
-    label: 'Raporlar',
+    label: 'Siparisler',
   },
   {
     key: 'ayarlar',

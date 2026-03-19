@@ -17,6 +17,16 @@ export type DyehouseLine = {
   notes?: string;
 };
 
+export type DyehouseProgressEntry = {
+  id: string;
+  jobId: string;
+  createdAt: string;
+  meters: number;
+  metersPerUnit?: number;
+  unitCount?: number;
+  note?: string;
+};
+
 export type DyehouseJob = {
   id: string;
   dyehouseId: string;

@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
 import Image from "next/image";
@@ -27,6 +28,14 @@ import { dyehouseLocalRepo } from "@/lib/repos/dyehouseLocalRepo";
 import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
 import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
 import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
+import {
+  WORKFLOW_PROGRESS_EPSILON,
+  calculateProgressTotalMeters,
+  nowDateTimeLocal,
+  toIsoFromDateTimeLocal,
+  toPositiveIntInput as toPositiveInt,
+  toPositiveNumberInput as toPositiveNumber,
+} from "@/lib/workflowProgress";
 
 const fmt = (value: number) =>
   value.toLocaleString("tr-TR", { maximumFractionDigits: 2 });
@@ -41,36 +50,6 @@ const formatDateTime = (value: string) => {
     hour: "2-digit",
     minute: "2-digit",
   });
-};
-
-const nowDateTimeLocal = () => {
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
-};
-
-const toIsoFromDateTimeLocal = (value: string, label: string) => {
-  const trimmed = value.trim();
-  if (!trimmed) throw new Error(`${label} gerekli.`);
-  const parsed = new Date(trimmed);
-  if (Number.isNaN(parsed.getTime())) throw new Error(`${label} gecersiz.`);
-  return parsed.toISOString();
-};
-
-const toPositiveNumber = (value: string, label: string) => {
-  const parsed = Number(value.trim().replace(",", "."));
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`${label} 0'dan buyuk olmali.`);
-  }
-  return parsed;
-};
-
-const toPositiveInt = (value: string, label: string) => {
-  const parsed = Number(value.trim());
-  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${label} 1 veya daha buyuk tam sayi olmali.`);
-  }
-  return parsed;
 };
 
 const sortPatterns = (patterns: Pattern[]) =>
@@ -405,7 +384,7 @@ const sumPlanVariantWovenMeters = (variants: WeavingPlanVariant[]) =>
 const sumPlanVariantShippedMeters = (variants: WeavingPlanVariant[]) =>
   variants.reduce((sum, variant) => sum + variant.shippedMeters, 0);
 
-const EPSILON = 1e-6;
+const EPSILON = WORKFLOW_PROGRESS_EPSILON;
 
 const getVariantDisplayName = (variant: WeavingPlanVariant) =>
   [variant.variantCode?.trim(), variant.colorName.trim()].filter(Boolean).join(" / ");
@@ -546,6 +525,7 @@ export default function Dokuma() {
   const [progressUnitCountInput, setProgressUnitCountInput] = useState("1");
   const [progressNote, setProgressNote] = useState("");
   const [progressError, setProgressError] = useState("");
+  const progressMetersInputRef = useRef<HTMLInputElement | null>(null);
 
   const [transferPlanId, setTransferPlanId] = useState<string | null>(null);
   const [transferDateTime, setTransferDateTime] = useState(nowDateTimeLocal());
@@ -736,11 +716,7 @@ export default function Dokuma() {
   }, [selectedProgressPlan, planTotalsById]);
 
   const progressCalculatedTotal = useMemo(() => {
-    const metersPerUnit = Number(progressMetersInput.trim().replace(",", "."));
-    const unitCount = Number(progressUnitCountInput.trim());
-    if (!Number.isFinite(metersPerUnit) || metersPerUnit <= 0) return 0;
-    if (!Number.isFinite(unitCount) || !Number.isInteger(unitCount) || unitCount <= 0) return 0;
-    return metersPerUnit * unitCount;
+    return calculateProgressTotalMeters(progressMetersInput, progressUnitCountInput);
   }, [progressMetersInput, progressUnitCountInput]);
 
   const progressWarnings = useMemo(() => {
@@ -911,6 +887,24 @@ export default function Dokuma() {
       }
     };
   }, [newPatternForm.digitalPreviewUrl, newPatternForm.finalPreviewUrl]);
+
+  const focusProgressMetersInput = () => {
+    const input = progressMetersInputRef.current;
+    if (!input) return;
+    requestAnimationFrame(() => {
+      input.focus();
+      input.select();
+    });
+  };
+
+  useEffect(() => {
+    if (!selectedProgressPlan) return;
+    const frame = requestAnimationFrame(() => {
+      progressMetersInputRef.current?.focus();
+      progressMetersInputRef.current?.select();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selectedProgressPlan]);
 
   const resetNewPatternForm = () => {
     setNewPatternForm((prev) => {
@@ -1139,61 +1133,26 @@ export default function Dokuma() {
       const unitCount = toPositiveInt(progressUnitCountInput, "Adet");
       const totalMeters = metersPerUnit * unitCount;
       const createdAt = toIsoFromDateTimeLocal(progressDateTime, "Tarih/Saat");
-      const totals = resolvePlanTotals(selectedPlan, planTotalsById);
 
       if (hasPlanVariants(selectedPlan) && !progressVariantId) {
         throw new Error("Varyant secimi gerekli.");
       }
 
-      const persistProgress = () => {
-        try {
-          weavingLocalRepo.addProgress({
-            planId: progressPlanId,
-            variantId: hasPlanVariants(selectedPlan) ? progressVariantId : undefined,
-            createdAt,
-            meters: totalMeters,
-            metersPerUnit,
-            unitCount,
-            note: progressNote.trim() || undefined,
-          });
+      weavingLocalRepo.addProgress({
+        planId: progressPlanId,
+        variantId: hasPlanVariants(selectedPlan) ? progressVariantId : undefined,
+        createdAt,
+        meters: totalMeters,
+        metersPerUnit,
+        unitCount,
+        note: progressNote.trim() || undefined,
+      });
 
-          setProgressMetersInput("");
-          setProgressUnitCountInput("1");
-          setProgressVariantId(
-            hasPlanVariants(selectedPlan)
-              ? selectedPlan.variants.find((variant) => variant.id === progressVariantId)?.id ??
-                  selectedPlan.variants[0]?.id ??
-                  ""
-              : ""
-          );
-          setProgressDateTime(nowDateTimeLocal());
-          setProgressNote("");
-          setProgressError("");
-          refreshData();
-        } catch (error) {
-          setProgressError(error instanceof Error ? error.message : "Ilerleme kaydedilemedi.");
-        }
-      };
-
-      const warningMessages = getProgressWarningMessages(
-        selectedPlan,
-        totals,
-        progressVariantId,
-        totalMeters
-      );
-
-      if (warningMessages.length > 0) {
-        setWarningConfirm({
-          title: "Ilerleme Uyarisi",
-          summary: "Bu giris plandaki metrelerle tam uyusmuyor.",
-          messages: warningMessages,
-          confirmLabel: "Devam Et",
-          onConfirm: persistProgress,
-        });
-        return;
-      }
-
-      persistProgress();
+      setProgressMetersInput("");
+      setProgressNote("");
+      setProgressError("");
+      refreshData();
+      focusProgressMetersInput();
     } catch (error) {
       setProgressError(error instanceof Error ? error.message : "Ilerleme kaydedilemedi.");
     }
@@ -1202,7 +1161,15 @@ export default function Dokuma() {
   const handleDeleteProgress = (id: string) => {
     if (!canEditWeaving) return;
     weavingLocalRepo.deleteProgress(id);
+    setProgressError("");
     refreshData();
+    focusProgressMetersInput();
+  };
+
+  const handleProgressMetersKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    handleAddProgress();
   };
 
   const openTransferModal = (planId: string) => {
@@ -2145,11 +2112,13 @@ export default function Dokuma() {
               <label className="space-y-1 text-sm text-neutral-700">
                 <span>Metre</span>
                 <input
+                  ref={progressMetersInputRef}
                   type="number"
                   min="0"
                   step="0.01"
                   value={progressMetersInput}
                   onChange={(event) => setProgressMetersInput(event.target.value)}
+                  onKeyDown={handleProgressMetersKeyDown}
                   placeholder="0"
                   className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
                 />

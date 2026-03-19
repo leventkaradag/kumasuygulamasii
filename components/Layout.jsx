@@ -8,6 +8,13 @@ import { createClient } from "@/lib/supabase/client";
 import { useAuthProfile } from "@/components/AuthProfileProvider";
 import { cn } from "../lib/cn";
 
+/**
+ * @param {{
+ *   title?: string;
+ *   description?: string;
+ *   children: import("react").ReactNode;
+ * }} props
+ */
 export default function Layout({ title, description = undefined, children }) {
   const supabase = createClient();
   const router = useRouter();

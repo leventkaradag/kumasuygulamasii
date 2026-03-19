@@ -1,16 +1,38 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import { useAuthProfile } from "@/components/AuthProfileProvider";
 import Layout from "../components/Layout";
 import { cn } from "@/lib/cn";
-import type { Dyehouse, DyehouseJob, DyehouseJobStatus, DyehouseLine } from "@/lib/domain/dyehouse";
+import type {
+  Dyehouse,
+  DyehouseJob,
+  DyehouseJobStatus,
+  DyehouseLine,
+  DyehouseProgressEntry,
+} from "@/lib/domain/dyehouse";
 import type { WeavingDispatchDocument } from "@/lib/domain/weaving";
 import { dyehouseLocalRepo } from "@/lib/repos/dyehouseLocalRepo";
 import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
 import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
+import {
+  WORKFLOW_PROGRESS_EPSILON,
+  calculateProgressTotalMeters,
+  nowDateTimeLocal,
+  toIsoFromDateTimeLocal,
+  toPositiveIntInput,
+  toPositiveNumberInput,
+} from "@/lib/workflowProgress";
 
 type ViewMode = "MIX" | "BY_DYEHOUSE";
 type JobTab = "RECEIVED" | "IN_PROCESS" | "FINISHED";
@@ -24,6 +46,13 @@ type LineDraft = {
   outputKg: string;
   wasteKg: string;
   notes: string;
+};
+
+type JobProgressTotals = {
+  targetMeters: number;
+  processedMeters: number;
+  remainingMeters: number;
+  remainingInputMeters: number;
 };
 
 const JOB_TABS: JobTab[] = ["RECEIVED", "IN_PROCESS", "FINISHED"];
@@ -109,6 +138,45 @@ const createLineDraft = (line?: DyehouseLine): LineDraft => ({
   notes: line?.notes ?? "",
 });
 
+const getJobTargetMeters = (job: DyehouseJob) => {
+  const distributedMeters = sumMeters(job.lines);
+  return distributedMeters > 0 ? distributedMeters : job.inputMetersTotal;
+};
+
+const buildJobProgressTotals = (
+  job: DyehouseJob,
+  progressEntries: DyehouseProgressEntry[]
+): JobProgressTotals => {
+  const processedMeters = progressEntries.reduce((sum, entry) => sum + entry.meters, 0);
+  const targetMeters = getJobTargetMeters(job);
+  return {
+    targetMeters,
+    processedMeters,
+    remainingMeters: targetMeters - processedMeters,
+    remainingInputMeters: job.inputMetersTotal - processedMeters,
+  };
+};
+
+const formatRemainingMeters = (meters: number) =>
+  meters >= 0 ? `${fmt(meters)} m` : `Asim +${fmt(Math.abs(meters))} m`;
+
+const getProgressAmountText = (
+  entry: Pick<DyehouseProgressEntry, "meters" | "metersPerUnit" | "unitCount">
+) => {
+  if (
+    typeof entry.metersPerUnit === "number" &&
+    Number.isFinite(entry.metersPerUnit) &&
+    typeof entry.unitCount === "number" &&
+    Number.isFinite(entry.unitCount)
+  ) {
+    if (entry.unitCount > 1) {
+      return `${fmt(entry.metersPerUnit)} m x ${entry.unitCount} = ${fmt(entry.meters)} m`;
+    }
+  }
+
+  return `${fmt(entry.meters)} m`;
+};
+
 function StatusBadge({ status }: { status: DyehouseJobStatus }) {
   return (
     <span
@@ -122,10 +190,40 @@ function StatusBadge({ status }: { status: DyehouseJobStatus }) {
   );
 }
 
+type MetricCardProps = {
+  title: string;
+  value: string;
+  tone?: "neutral" | "danger";
+};
+
+function MetricCard({ title, value, tone = "neutral" }: MetricCardProps) {
+  return (
+    <div
+      className={cn(
+        "rounded-lg border px-3 py-3",
+        tone === "danger" ? "border-rose-500/20 bg-rose-50" : "border-black/10 bg-neutral-50"
+      )}
+    >
+      <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{title}</div>
+      <div
+        className={cn(
+          "mt-1 text-lg font-semibold",
+          tone === "danger" ? "text-rose-700" : "text-neutral-900"
+        )}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
 export default function Boyahane() {
   const { permissions } = useAuthProfile();
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>(() => dyehouseLocalRepo.list());
   const [jobs, setJobs] = useState<DyehouseJob[]>(() => dyehouseLocalRepo.listJobs());
+  const [progressEntries, setProgressEntries] = useState<DyehouseProgressEntry[]>(() =>
+    dyehouseLocalRepo.listProgress()
+  );
   const [dispatchDocuments, setDispatchDocuments] = useState<WeavingDispatchDocument[]>(() =>
     weavingLocalRepo.listDispatchDocuments()
   );
@@ -137,9 +235,14 @@ export default function Boyahane() {
   const [feedback, setFeedback] = useState("");
   const canCreateJobs = permissions.dyehouse.create;
 
+  const refreshProgress = () => {
+    setProgressEntries(dyehouseLocalRepo.listProgress());
+  };
+
   const refreshData = () => {
     setDyehouses(dyehouseLocalRepo.list());
     setJobs(dyehouseLocalRepo.listJobs());
+    refreshProgress();
     setDispatchDocuments(weavingLocalRepo.listDispatchDocuments());
   };
 
@@ -224,6 +327,71 @@ export default function Boyahane() {
         })
         .sort((a, b) => toTimestamp(b.receivedAt) - toTimestamp(a.receivedAt)),
     [jobs, jobTab, normalizedQuery, inScope]
+  );
+
+  const jobsForSummary = useMemo(
+    () =>
+      [...jobs]
+        .filter((job) => inScope(job.dyehouseId))
+        .filter((job) => {
+          if (!normalizedQuery) return true;
+          const code = normalizeSearchToken(job.patternCodeSnapshot);
+          const name = normalizeSearchToken(job.patternNameSnapshot);
+          return code.includes(normalizedQuery) || name.includes(normalizedQuery);
+        })
+        .sort((a, b) => toTimestamp(b.receivedAt) - toTimestamp(a.receivedAt)),
+    [jobs, normalizedQuery, inScope]
+  );
+
+  const progressEntriesByJobId = useMemo(() => {
+    const next = new Map<string, DyehouseProgressEntry[]>();
+    progressEntries.forEach((entry) => {
+      const bucket = next.get(entry.jobId);
+      if (bucket) {
+        bucket.push(entry);
+        return;
+      }
+      next.set(entry.jobId, [entry]);
+    });
+    return next;
+  }, [progressEntries]);
+
+  const jobProgressTotalsById = useMemo(() => {
+    return new Map(
+      jobs.map((job) => [
+        job.id,
+        buildJobProgressTotals(job, progressEntriesByJobId.get(job.id) ?? []),
+      ] as const)
+    );
+  }, [jobs, progressEntriesByJobId]);
+
+  const selectedJobProgressEntries = useMemo(
+    () => (selectedJobId ? progressEntriesByJobId.get(selectedJobId) ?? [] : []),
+    [progressEntriesByJobId, selectedJobId]
+  );
+
+  const summaryTotals = useMemo(
+    () =>
+      jobsForSummary.reduce(
+        (totals, job) => {
+          const progressTotals =
+            jobProgressTotalsById.get(job.id) ??
+            buildJobProgressTotals(job, progressEntriesByJobId.get(job.id) ?? []);
+          return {
+            jobCount: totals.jobCount + 1,
+            targetMeters: totals.targetMeters + progressTotals.targetMeters,
+            processedMeters: totals.processedMeters + progressTotals.processedMeters,
+            remainingMeters: totals.remainingMeters + progressTotals.remainingMeters,
+          };
+        },
+        {
+          jobCount: 0,
+          targetMeters: 0,
+          processedMeters: 0,
+          remainingMeters: 0,
+        }
+      ),
+    [jobProgressTotalsById, jobsForSummary, progressEntriesByJobId]
   );
 
   const jobsByStatus = useMemo(() => {
@@ -318,6 +486,17 @@ export default function Boyahane() {
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Desen kodu/adi ara..."
               className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+            />
+          </div>
+
+          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard title="Kapsamdaki Is" value={`${summaryTotals.jobCount}`} />
+            <MetricCard title="Toplam Hedef (m)" value={fmt(summaryTotals.targetMeters)} />
+            <MetricCard title="Toplam Islenen (m)" value={fmt(summaryTotals.processedMeters)} />
+            <MetricCard
+              title="Kalan / Asim"
+              value={formatRemainingMeters(summaryTotals.remainingMeters)}
+              tone={summaryTotals.remainingMeters < 0 ? "danger" : "neutral"}
             />
           </div>
         </section>
@@ -423,38 +602,55 @@ export default function Boyahane() {
                   <th className="px-3 py-2 font-semibold">Boyahane</th>
                   <th className="px-3 py-2 font-semibold">Desen</th>
                   <th className="px-3 py-2 font-semibold">Giris (m)</th>
-                  <th className="px-3 py-2 font-semibold">Dagitim (m)</th>
+                  <th className="px-3 py-2 font-semibold">Hedef (m)</th>
+                  <th className="px-3 py-2 font-semibold">Islenen (m)</th>
+                  <th className="px-3 py-2 font-semibold">Kalan / Asim</th>
                   <th className="px-3 py-2 font-semibold">Durum</th>
                   <th className="px-3 py-2 font-semibold">Aksiyon</th>
                 </tr>
               </thead>
               <tbody className="text-neutral-800">
-                {filteredJobs.map((job) => (
-                  <tr key={job.id} className="border-t border-black/5">
-                    <td className="px-3 py-2">{formatDateTime(job.receivedAt)}</td>
-                    <td className="px-3 py-2">{job.dyehouseNameSnapshot}</td>
-                    <td className="px-3 py-2">
-                      {job.patternCodeSnapshot} - {job.patternNameSnapshot}
-                    </td>
-                    <td className="px-3 py-2">{fmt(job.inputMetersTotal)}</td>
-                    <td className="px-3 py-2">{fmt(sumMeters(job.lines))}</td>
-                    <td className="px-3 py-2">
-                      <StatusBadge status={job.status} />
-                    </td>
-                    <td className="px-3 py-2">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedJobId(job.id)}
-                        className="rounded border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                {filteredJobs.map((job) => {
+                  const progressTotals =
+                    jobProgressTotalsById.get(job.id) ??
+                    buildJobProgressTotals(job, progressEntriesByJobId.get(job.id) ?? []);
+
+                  return (
+                    <tr key={job.id} className="border-t border-black/5">
+                      <td className="px-3 py-2">{formatDateTime(job.receivedAt)}</td>
+                      <td className="px-3 py-2">{job.dyehouseNameSnapshot}</td>
+                      <td className="px-3 py-2">
+                        {job.patternCodeSnapshot} - {job.patternNameSnapshot}
+                      </td>
+                      <td className="px-3 py-2">{fmt(job.inputMetersTotal)}</td>
+                      <td className="px-3 py-2">{fmt(progressTotals.targetMeters)}</td>
+                      <td className="px-3 py-2">{fmt(progressTotals.processedMeters)}</td>
+                      <td
+                        className={cn(
+                          "px-3 py-2",
+                          progressTotals.remainingMeters < 0 ? "font-semibold text-rose-700" : ""
+                        )}
                       >
-                        Detay
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                        {formatRemainingMeters(progressTotals.remainingMeters)}
+                      </td>
+                      <td className="px-3 py-2">
+                        <StatusBadge status={job.status} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedJobId(job.id)}
+                          className="rounded border border-black/10 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
+                        >
+                          Detay
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
                 {filteredJobs.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-3 py-8 text-center text-sm text-neutral-500">
+                    <td colSpan={9} className="px-3 py-8 text-center text-sm text-neutral-500">
                       Secili filtreye uygun is emri yok.
                     </td>
                   </tr>
@@ -468,8 +664,10 @@ export default function Boyahane() {
       {selectedJob ? (
         <JobModal
           job={selectedJob}
+          progressEntries={selectedJobProgressEntries}
           sourceDispatch={selectedSourceDispatch}
           onClose={() => setSelectedJobId(null)}
+          onProgressChanged={refreshProgress}
           onSaved={(jobId) => {
             refreshData();
             if (jobId) setSelectedJobId(jobId);
@@ -482,19 +680,35 @@ export default function Boyahane() {
 
 type JobModalProps = {
   job: DyehouseJob;
+  progressEntries: DyehouseProgressEntry[];
   sourceDispatch: WeavingDispatchDocument | null;
   onClose: () => void;
+  onProgressChanged: () => void;
   onSaved: (jobId?: string) => void;
 };
-function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
+function JobModal({
+  job,
+  progressEntries,
+  sourceDispatch,
+  onClose,
+  onProgressChanged,
+  onSaved,
+}: JobModalProps) {
   const { permissions } = useAuthProfile();
   const [lineDrafts, setLineDrafts] = useState<LineDraft[]>([]);
   const [jobNotes, setJobNotes] = useState("");
+  const [progressDateTime, setProgressDateTime] = useState(nowDateTimeLocal());
+  const [progressMetersInput, setProgressMetersInput] = useState("");
+  const [progressUnitCountInput, setProgressUnitCountInput] = useState("1");
+  const [progressNote, setProgressNote] = useState("");
+  const [progressError, setProgressError] = useState("");
   const [isFinishing, setIsFinishing] = useState(false);
   const [allowFinishedEdit, setAllowFinishedEdit] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const progressMetersInputRef = useRef<HTMLInputElement | null>(null);
   const canEditBreakdown = permissions.dyehouse.edit;
+  const canEditProgress = permissions.dyehouse.edit;
   const canAdvanceDyehouse = permissions.dyehouse.advance;
   const canDeleteJob = permissions.dyehouse.delete;
   const canCreateDepotDispatch = permissions.dispatch.create;
@@ -507,6 +721,14 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
     setError("");
     setSuccess("");
   }, [job]);
+
+  useEffect(() => {
+    setProgressDateTime(nowDateTimeLocal());
+    setProgressMetersInput("");
+    setProgressUnitCountInput("1");
+    setProgressNote("");
+    setProgressError("");
+  }, [job.id]);
 
   const outputDocument = useMemo(
     () =>
@@ -595,6 +817,34 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
     }, 0);
   }, [lineDrafts]);
 
+  const progressCalculatedTotal = useMemo(() => {
+    return calculateProgressTotalMeters(progressMetersInput, progressUnitCountInput);
+  }, [progressMetersInput, progressUnitCountInput]);
+
+  const progressTotals = useMemo(() => {
+    return buildJobProgressTotals(job, progressEntries);
+  }, [job, progressEntries]);
+
+  const progressWarnings = useMemo(() => {
+    if (progressCalculatedTotal <= 0) return [];
+
+    const nextProcessedMeters = progressTotals.processedMeters + progressCalculatedTotal;
+    const warnings: string[] = [];
+
+    if (nextProcessedMeters - progressTotals.targetMeters > WORKFLOW_PROGRESS_EPSILON) {
+      warnings.push("Bu giris is hedef metresini asiyor.");
+    }
+
+    if (
+      progressTotals.remainingInputMeters - progressCalculatedTotal < -WORKFLOW_PROGRESS_EPSILON &&
+      Math.abs(job.inputMetersTotal - progressTotals.targetMeters) > WORKFLOW_PROGRESS_EPSILON
+    ) {
+      warnings.push("Bu giris kaynak giris metresini de asiyor olabilir.");
+    }
+
+    return warnings;
+  }, [job.inputMetersTotal, progressCalculatedTotal, progressTotals]);
+
   const finishWarnings = useMemo(
     () =>
       lineDrafts.flatMap((row) => {
@@ -615,6 +865,62 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
 
   const removeRow = (id: string) => {
     setLineDrafts((prev) => prev.filter((row) => row.id !== id));
+  };
+
+  const focusProgressMetersInput = () => {
+    const input = progressMetersInputRef.current;
+    if (!input) return;
+    requestAnimationFrame(() => {
+      input.focus();
+      input.select();
+    });
+  };
+
+  const saveProgress = () => {
+    if (!canEditProgress) return;
+
+    try {
+      const metersPerUnit = toPositiveNumberInput(progressMetersInput, "Metre");
+      const unitCount = toPositiveIntInput(progressUnitCountInput, "Adet");
+      const totalMeters = metersPerUnit * unitCount;
+      const createdAt = toIsoFromDateTimeLocal(progressDateTime, "Tarih / Saat");
+
+      dyehouseLocalRepo.addProgress({
+        jobId: job.id,
+        createdAt,
+        meters: totalMeters,
+        metersPerUnit,
+        unitCount,
+        note: progressNote.trim() || undefined,
+      });
+
+      setProgressMetersInput("");
+      setProgressNote("");
+      setProgressError("");
+      setSuccess("Ilerleme kaydedildi.");
+      setError("");
+      onProgressChanged();
+      focusProgressMetersInput();
+    } catch (saveError) {
+      setSuccess("");
+      setProgressError(saveError instanceof Error ? saveError.message : "Ilerleme kaydedilemedi.");
+    }
+  };
+
+  const deleteProgress = (progressId: string) => {
+    if (!canEditProgress) return;
+    dyehouseLocalRepo.deleteProgress(progressId);
+    setProgressError("");
+    setSuccess("Ilerleme silindi.");
+    setError("");
+    onProgressChanged();
+    focusProgressMetersInput();
+  };
+
+  const handleProgressMetersKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    saveProgress();
   };
 
   const saveBreakdown = () => {
@@ -739,12 +1045,149 @@ function JobModal({ job, sourceDispatch, onClose, onSaved }: JobModalProps) {
           </div>
           <div className="mt-1">Boyahane: {job.dyehouseNameSnapshot}</div>
           <div>Giris Metre: {fmt(job.inputMetersTotal)} m</div>
-          <div>Dagitim Toplami: {fmt(plannedMetersFromDraft)} m</div>
+          <div>Hedef Metre: {fmt(progressTotals.targetMeters)} m</div>
+          <div>Islenen: {fmt(progressTotals.processedMeters)} m</div>
+          <div>Kalan / Asim: {formatRemainingMeters(progressTotals.remainingMeters)}</div>
           <div>Alim: {formatDateTime(job.receivedAt)}</div>
           {job.finishedAt ? <div>Bitis: {formatDateTime(job.finishedAt)}</div> : null}
           {sourceDispatch ? (
             <div className="mt-1 text-xs">
               Kaynak Belge: <span className="font-mono">{sourceDispatch.docNo}</span>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="space-y-2 rounded-lg border border-black/10 bg-white p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+              Ilerleme Gir
+            </div>
+            <div className="rounded-full border border-black/10 bg-neutral-50 px-2.5 py-1 text-[11px] font-semibold text-neutral-700">
+              Toplam Islenen: {fmt(progressTotals.processedMeters)} m
+            </div>
+          </div>
+
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_140px_110px_150px]">
+            <label className="space-y-1 text-xs text-neutral-700">
+              <span>Tarih / Saat</span>
+              <input
+                type="datetime-local"
+                value={progressDateTime}
+                disabled={!canEditProgress}
+                onChange={(event) => setProgressDateTime(event.target.value)}
+                className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
+              />
+            </label>
+
+            <label className="space-y-1 text-xs text-neutral-700">
+              <span>Metre</span>
+              <input
+                ref={progressMetersInputRef}
+                type="number"
+                min="0"
+                step="0.01"
+                value={progressMetersInput}
+                disabled={!canEditProgress}
+                onChange={(event) => setProgressMetersInput(event.target.value)}
+                onKeyDown={handleProgressMetersKeyDown}
+                placeholder="0"
+                className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
+              />
+            </label>
+
+            <label className="space-y-1 text-xs text-neutral-700">
+              <span>Adet</span>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={progressUnitCountInput}
+                disabled={!canEditProgress}
+                onChange={(event) => setProgressUnitCountInput(event.target.value)}
+                placeholder="1"
+                className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
+              />
+            </label>
+
+            <div className="space-y-1 text-xs text-neutral-700">
+              <span className="block">Toplam Ilerleme</span>
+              <div className="rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-sm font-semibold text-neutral-900">
+                {fmt(progressCalculatedTotal)} m
+              </div>
+            </div>
+          </div>
+
+          <input
+            type="text"
+            value={progressNote}
+            disabled={!canEditProgress}
+            onChange={(event) => setProgressNote(event.target.value)}
+            placeholder="Not (opsiyonel)"
+            className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
+          />
+
+          <div className="rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-xs text-neutral-700">
+            Hedef: {fmt(progressTotals.targetMeters)} m / Islenen: {fmt(progressTotals.processedMeters)} m / Kalan / Asim:{" "}
+            {formatRemainingMeters(progressTotals.remainingMeters)}
+          </div>
+
+          {progressWarnings.length > 0 ? (
+            <div className="rounded-lg border border-rose-500/30 bg-rose-50 px-3 py-3 text-sm text-rose-800">
+              <div className="flex items-start gap-2">
+                <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-100 font-semibold text-rose-700">
+                  !
+                </span>
+                <div className="space-y-1">
+                  <div className="font-medium">Hedef asimi uyarisi var; kayit yine alinacak.</div>
+                  {progressWarnings.map((warning) => (
+                    <div key={warning} className="text-xs text-rose-700">
+                      {warning}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="rounded-lg border border-black/10 bg-white p-2">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+              Son 5 Ilerleme
+            </div>
+            <div className="space-y-1 text-xs text-neutral-700">
+              {progressEntries.slice(0, 5).map((entry) => (
+                <div key={entry.id} className="flex items-center justify-between gap-2">
+                  <span>
+                    {formatDateTime(entry.createdAt)}
+                    {" - "}
+                    {getProgressAmountText(entry)}
+                    {entry.note ? ` (${entry.note})` : ""}
+                  </span>
+                  {canEditProgress ? (
+                    <button
+                      type="button"
+                      onClick={() => deleteProgress(entry.id)}
+                      className="rounded border border-rose-500/30 bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100"
+                    >
+                      Sil
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+              {progressEntries.length === 0 ? <div>Kayit yok.</div> : null}
+            </div>
+          </div>
+
+          {progressError ? <p className="text-xs font-medium text-rose-600">{progressError}</p> : null}
+
+          {canEditProgress ? (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={saveProgress}
+                className="rounded-lg bg-coffee-primary px-3 py-2 text-xs font-semibold text-white transition hover:brightness-95"
+              >
+                Kaydet
+              </button>
             </div>
           ) : null}
         </div>

@@ -749,6 +749,57 @@ const updatePlan = (
   return next;
 };
 
+const recalculateVariantPlanMetrics = (planId: string): WeavingPlan | undefined => {
+  const plans = readPlans();
+  const index = plans.findIndex((plan) => plan.id === planId);
+  if (index < 0) return undefined;
+
+  const plan = plans[index];
+  if (!hasPlanVariants(plan)) {
+    return plan;
+  }
+
+  const wovenByVariantId = new Map<string, number>();
+  readProgress().forEach((entry) => {
+    if (entry.planId !== planId || !entry.variantId) return;
+    wovenByVariantId.set(entry.variantId, (wovenByVariantId.get(entry.variantId) ?? 0) + entry.meters);
+  });
+
+  const shippedByVariantId = new Map<string, number>();
+  readTransfers().forEach((transfer) => {
+    if (transfer.planId !== planId || !transfer.variantLines?.length) return;
+    transfer.variantLines.forEach((line) => {
+      shippedByVariantId.set(
+        line.variantId,
+        (shippedByVariantId.get(line.variantId) ?? 0) + line.meters
+      );
+    });
+  });
+
+  const nextVariants = plan.variants.map((variant) => {
+    const wovenMeters = Math.max(0, wovenByVariantId.get(variant.id) ?? 0);
+    const shippedMeters = Math.max(0, shippedByVariantId.get(variant.id) ?? 0);
+    const status: WeavingPlanVariantStatus =
+      wovenMeters >= variant.plannedMeters ? "DONE" : "ACTIVE";
+    return {
+      ...variant,
+      wovenMeters,
+      shippedMeters,
+      status,
+    };
+  });
+
+  const nextPlan: WeavingPlan = {
+    ...plan,
+    plannedMeters: sumVariantPlannedMeters(nextVariants),
+    variants: nextVariants,
+  };
+
+  plans[index] = nextPlan;
+  writePlans(plans);
+  return nextPlan;
+};
+
 export const ensurePatternByCodeAndNameAndImage = (
   fabricCode: string,
   fabricName: string,
@@ -954,43 +1005,18 @@ export const weavingLocalRepo = {
 
     if (normalizeText(input.variantId)) {
       const normalizedVariantId = normalizeRequiredText(input.variantId!, "Varyant");
-      const updated = updatePlan(normalizedPlanId, (currentPlan) => {
-        const variants = currentPlan.variants ?? [];
-        if (variants.length === 0) {
-          throw new Error("Bu planda varyant bulunmuyor.");
-        }
+      if (!hasPlanVariants(plan)) {
+        throw new Error("Bu planda varyant bulunmuyor.");
+      }
 
-        let matchedVariant: WeavingPlanVariant | undefined;
-        const nextVariants: WeavingPlanVariant[] = variants.map((variant) => {
-          if (variant.id !== normalizedVariantId) return variant;
-          matchedVariant = variant;
+      const matchedVariant = plan.variants.find((variant) => variant.id === normalizedVariantId);
+      if (!matchedVariant) {
+        throw new Error("Varyant bulunamadi.");
+      }
 
-          const wovenMeters = variant.wovenMeters + normalizedMeters;
-          const status: WeavingPlanVariantStatus =
-            wovenMeters >= variant.plannedMeters ? "DONE" : "ACTIVE";
-          return {
-            ...variant,
-            wovenMeters,
-            status,
-          };
-        });
-
-        if (!matchedVariant) {
-          throw new Error("Varyant bulunamadi.");
-        }
-
-        variantId = matchedVariant.id;
-        variantCodeSnapshot = matchedVariant.variantCode;
-        colorNameSnapshot = matchedVariant.colorName;
-
-        return {
-          ...currentPlan,
-          plannedMeters: sumVariantPlannedMeters(nextVariants),
-          variants: nextVariants,
-        };
-      });
-
-      if (!updated) throw new Error("Plan bulunamadi.");
+      variantId = matchedVariant.id;
+      variantCodeSnapshot = matchedVariant.variantCode;
+      colorNameSnapshot = matchedVariant.colorName;
     }
 
     const next: WeavingProgressEntry = {
@@ -1009,6 +1035,11 @@ export const weavingLocalRepo = {
     const entries = readProgress();
     entries.push(next);
     writeProgress(entries);
+
+    if (hasPlanVariants(plan)) {
+      recalculateVariantPlanMetrics(normalizedPlanId);
+    }
+
     return next;
   },
 
@@ -1071,30 +1102,6 @@ export const weavingLocalRepo = {
         throw new Error("En az bir varyant icin sevk metresi 0'dan buyuk olmali.");
       }
 
-      const linesByVariantId = new Map<string, number>(
-        normalizedVariantLines.map((line) => [line.variantId, line.meters])
-      );
-      const updated = updatePlan(normalizedPlanId, (currentPlan) => {
-        if (!hasPlanVariants(currentPlan)) {
-          throw new Error("Plan varyant bilgisi guncel degil.");
-        }
-
-        const nextVariants = currentPlan.variants.map((variant) => {
-          const shippedAdd = linesByVariantId.get(variant.id) ?? 0;
-          if (shippedAdd <= 0) return variant;
-          return {
-            ...variant,
-            shippedMeters: variant.shippedMeters + shippedAdd,
-          };
-        });
-
-        return {
-          ...currentPlan,
-          variants: nextVariants,
-        };
-      });
-
-      if (!updated) throw new Error("Plan bulunamadi.");
       variantLines = normalizedVariantLines;
     } else {
       meters = normalizePositiveNumber(input.meters, "Metre");
@@ -1158,6 +1165,10 @@ export const weavingLocalRepo = {
     );
     documents.push(dispatchDocument);
     writeDispatchDocuments(documents);
+
+    if (hasPlanVariants(plan)) {
+      recalculateVariantPlanMetrics(normalizedPlanId);
+    }
 
     return next;
   },
@@ -1231,26 +1242,7 @@ export const weavingLocalRepo = {
     writeProgress(next);
 
     if (removed?.variantId) {
-      updatePlan(removed.planId, (plan) => {
-        if (!hasPlanVariants(plan)) return plan;
-
-        const nextVariants = plan.variants.map((variant) => {
-          if (variant.id !== removed.variantId) return variant;
-          const wovenMeters = Math.max(0, variant.wovenMeters - removed.meters);
-          const status: WeavingPlanVariantStatus =
-            wovenMeters >= variant.plannedMeters ? "DONE" : "ACTIVE";
-          return {
-            ...variant,
-            wovenMeters,
-            status,
-          };
-        });
-
-        return {
-          ...plan,
-          variants: nextVariants,
-        };
-      });
+      recalculateVariantPlanMetrics(removed.planId);
     }
 
     return true;
@@ -1264,27 +1256,7 @@ export const weavingLocalRepo = {
     writeTransfers(next);
 
     if (removed?.variantLines && removed.variantLines.length > 0) {
-      updatePlan(removed.planId, (plan) => {
-        if (!hasPlanVariants(plan)) return plan;
-        const removedMetersByVariantId = new Map<string, number>();
-        removed.variantLines?.forEach((line) => {
-          removedMetersByVariantId.set(
-            line.variantId,
-            (removedMetersByVariantId.get(line.variantId) ?? 0) + line.meters
-          );
-        });
-        const nextVariants = plan.variants.map((variant) => ({
-          ...variant,
-          shippedMeters: Math.max(
-            0,
-            variant.shippedMeters - (removedMetersByVariantId.get(variant.id) ?? 0)
-          ),
-        }));
-        return {
-          ...plan,
-          variants: nextVariants,
-        };
-      });
+      recalculateVariantPlanMetrics(removed.planId);
     }
 
     const documents = readDispatchDocuments();

@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import {
   Fragment,
+  type KeyboardEvent,
   type ReactNode,
   useCallback,
   useEffect,
@@ -117,6 +118,20 @@ type OperationSummary = {
   patterns: OperationSummaryPatternRow[];
   totalTops: number;
   totalMetres: number;
+};
+
+type PendingAddEntry = {
+  id: string;
+  patternId: string;
+  patternNoSnapshot: string;
+  patternNameSnapshot: string;
+  variantId?: string;
+  colorName: string;
+  meters: number;
+  quantity: number;
+  totalMetres: number;
+  createdAt: string;
+  note?: string;
 };
 
 type HistoryRow = {
@@ -368,6 +383,11 @@ const createRollInputRow = (): RollInputRow => ({
   quantity: "1",
 });
 
+const hasPositiveMetersDraftValue = (value: string) => {
+  const parsed = Number(value.trim().replace(",", "."));
+  return Number.isFinite(parsed) && parsed > 0;
+};
+
 const parseRollInputRows = (rows: RollInputRow[], labelPrefix: string): ParsedRollInputRow[] => {
   const parsedRows = rows.flatMap((row, index) => {
     const hasMeters = row.meters.trim() !== "";
@@ -504,6 +524,8 @@ export default function DepoPage() {
   const [addDate, setAddDate] = useState(todayInput());
   const [addNote, setAddNote] = useState("");
   const [addError, setAddError] = useState("");
+  const [pendingAddEntries, setPendingAddEntries] = useState<PendingAddEntry[]>([]);
+  const addMeterInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const [returnOpen, setReturnOpen] = useState(false);
   const [returnPatternId, setReturnPatternId] = useState("");
@@ -898,16 +920,6 @@ export default function DepoPage() {
     );
   };
 
-  const appendAddRow = () => {
-    setAddRows((current) => [...current, createRollInputRow()]);
-  };
-
-  const removeAddRow = (rowId: string) => {
-    setAddRows((current) =>
-      current.length === 1 ? current : current.filter((row) => row.id !== rowId)
-    );
-  };
-
   const openAddModal = () => {
     if (!canManageWarehouse) return;
     if (!selectedPattern) return;
@@ -916,53 +928,216 @@ export default function DepoPage() {
     setAddRows([createRollInputRow()]);
     setAddDate(todayInput());
     setAddNote("");
+    setPendingAddEntries([]);
     setAddError("");
     setAddOpen(true);
+  };
+
+  const focusAddMeterInput = (rowId: string) => {
+    requestAnimationFrame(() => {
+      const input = addMeterInputRefs.current[rowId];
+      input?.focus();
+      input?.select();
+    });
+  };
+
+  const firstAddRowId = addRows[0]?.id;
+  const pendingAddTotals = useMemo(
+    () =>
+      pendingAddEntries.reduce(
+        (totals, entry) => ({
+          totalTops: totals.totalTops + entry.quantity,
+          totalMetres: totals.totalMetres + entry.totalMetres,
+        }),
+        { totalTops: 0, totalMetres: 0 }
+      ),
+    [pendingAddEntries]
+  );
+
+  useEffect(() => {
+    if (!addOpen) return;
+    if (!firstAddRowId) return;
+    focusAddMeterInput(firstAddRowId);
+  }, [addOpen, firstAddRowId]);
+
+  const resolveAddColorContext = () => {
+    if (!selectedPattern) throw new Error("Desen secimi bulunamadi.");
+    const variant =
+      addVariantId !== "__other"
+        ? selectedPattern.variants.find((item) => item.id === addVariantId)
+        : undefined;
+    const colorName =
+      addVariantId === "__other" ? addColorName.trim() : variant?.colorName ?? variant?.name ?? "";
+
+    if (!colorName && !variant) {
+      throw new Error("Renk seciniz.");
+    }
+
+    return {
+      variant,
+      colorName,
+    };
+  };
+
+  const buildPendingAddEntriesFromParsedRows = (
+    parsedRows: ParsedRollInputRow[],
+    note?: string
+  ): PendingAddEntry[] => {
+    if (!selectedPattern) throw new Error("Desen secimi bulunamadi.");
+
+    const inAt = toIsoDate(addDate, "Giris tarihi");
+    const { variant, colorName } = resolveAddColorContext();
+
+    return parsedRows.map((row) => ({
+      id: createLocalId(),
+      patternId: selectedPattern.id,
+      patternNoSnapshot: selectedPattern.fabricCode,
+      patternNameSnapshot: selectedPattern.fabricName,
+      variantId: variant?.id,
+      colorName,
+      meters: row.meters,
+      quantity: row.quantity,
+      totalMetres: row.meters * row.quantity,
+      createdAt: inAt,
+      note,
+    }));
+  };
+
+  const persistPendingAddEntries = (entries: PendingAddEntry[]) => {
+    if (entries.length === 0) {
+      throw new Error("En az bir top girisi ekleyiniz.");
+    }
+
+    const groupedAddedRolls = new Map<
+      string,
+      {
+        createdAt: string;
+        note?: string;
+        rolls: FabricRoll[];
+      }
+    >();
+
+    entries.forEach((entry) => {
+      const groupKey = JSON.stringify([entry.createdAt, entry.note ?? ""]);
+      if (!groupedAddedRolls.has(groupKey)) {
+        groupedAddedRolls.set(groupKey, {
+          createdAt: entry.createdAt,
+          note: entry.note,
+          rolls: [],
+        });
+      }
+
+      const group = groupedAddedRolls.get(groupKey)!;
+      for (let index = 0; index < entry.quantity; index += 1) {
+        group.rolls.push(
+          depoLocalRepo.addRoll({
+            patternId: entry.patternId,
+            variantId: entry.variantId,
+            colorName: entry.colorName || undefined,
+            meters: entry.meters,
+            inAt: entry.createdAt,
+            note: entry.note,
+          })
+        );
+      }
+    });
+
+    const combinedSummaryLines: TransactionLineInput[] = [];
+    groupedAddedRolls.forEach((group) => {
+      const summaryLines = buildTransactionLineInputsFromRolls(group.rolls, patternsById);
+      depoTransactionsLocalRepo.createTransaction({
+        type: "ENTRY",
+        createdAt: group.createdAt,
+        note: group.note,
+        lines: summaryLines,
+      });
+      combinedSummaryLines.push(...summaryLines);
+    });
+
+    const summaryCreatedAt =
+      entries[0]?.createdAt ??
+      new Date().toISOString();
+
+    refreshData(selectedPattern?.id ?? null);
+    return {
+      createdAt: summaryCreatedAt,
+      summaryLines: combinedSummaryLines,
+    };
   };
 
   const handleAddRoll = () => {
     if (!canManageWarehouse) return;
     if (!selectedPattern) return;
     try {
-      const inAt = toIsoDate(addDate, "Giris tarihi");
-      const parsedRows = parseRollInputRows(addRows, "Top");
-      const variant = addVariantId !== "__other" ? selectedPattern.variants.find((item) => item.id === addVariantId) : undefined;
-      const colorName = addVariantId === "__other" ? addColorName.trim() : variant?.colorName ?? variant?.name ?? "";
-      if (!colorName && !variant) throw new Error("Renk seciniz.");
-
-      const addedRolls = parsedRows.flatMap((row) =>
-        Array.from({ length: row.quantity }, () =>
-          depoLocalRepo.addRoll({
-            patternId: selectedPattern.id,
-            variantId: variant?.id,
-            colorName: colorName || undefined,
-            meters: row.meters,
-            inAt,
-            note: addNote.trim() || undefined,
-          })
-        )
-      );
-      const summaryLines = buildTransactionLineInputsFromRolls(addedRolls, patternsById);
-
-      depoTransactionsLocalRepo.createTransaction({
-        type: "ENTRY",
-        createdAt: inAt,
-        note: addNote.trim() || undefined,
-        lines: summaryLines,
-      });
+      const note = addNote.trim() || undefined;
+      const addRowsToPersist = addRows.filter((row) => hasPositiveMetersDraftValue(row.meters));
+      const currentRowEntries = addRowsToPersist.length > 0
+        ? buildPendingAddEntriesFromParsedRows(parseRollInputRows(addRowsToPersist, "Top"), note)
+        : [];
+      const entriesToPersist = [...pendingAddEntries, ...currentRowEntries];
+      const { createdAt, summaryLines } = persistPendingAddEntries(entriesToPersist);
 
       setOperationSummary(
         buildOperationSummary(
           "Giris Ozeti",
           "Depo girisi basariyla kaydedildi.",
-          inAt,
+          createdAt,
           summaryLines
         )
       );
+      setPendingAddEntries([]);
       setAddOpen(false);
-      refreshData(selectedPattern.id);
     } catch (error) {
       setAddError(error instanceof Error ? error.message : "Top girisi kaydedilemedi");
+    }
+  };
+
+  const handleQuickAddRow = (rowId: string) => {
+    if (!canManageWarehouse) return;
+    if (!selectedPattern) return;
+
+    try {
+      const targetRow = addRows.find((row) => row.id === rowId);
+      if (!targetRow) return;
+
+      const parsedRow = parseRollInputRows([targetRow], "Top");
+      const note = addNote.trim() || undefined;
+      const nextEntries = buildPendingAddEntriesFromParsedRows(parsedRow, note);
+
+      setPendingAddEntries((current) => [...nextEntries, ...current]);
+      setAddRows((current) =>
+        current.map((row) =>
+          row.id === rowId
+            ? {
+                ...row,
+                meters: "",
+              }
+            : row
+        )
+      );
+      setAddNote("");
+      setAddError("");
+      focusAddMeterInput(rowId);
+    } catch (error) {
+      setAddError(error instanceof Error ? error.message : "Top girisi kaydedilemedi");
+    }
+  };
+
+  const handleAddRowMetersKeyDown = (
+    event: KeyboardEvent<HTMLInputElement>,
+    rowId: string
+  ) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    handleQuickAddRow(rowId);
+  };
+
+  const handleDeletePendingAddEntry = (entryId: string) => {
+    if (!canManageWarehouse) return;
+    setPendingAddEntries((current) => current.filter((entry) => entry.id !== entryId));
+    setAddError("");
+    if (firstAddRowId) {
+      focusAddMeterInput(firstAddRowId);
     }
   };
 
@@ -2172,18 +2347,22 @@ export default function DepoPage() {
             {addVariantId === "__other" ? <input type="text" value={addColorName} onChange={(e) => setAddColorName(e.target.value)} placeholder="Renk adi" className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" /> : null}
             <div className="rounded-xl border border-black/10 bg-neutral-50 p-3">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Top Satirlari</div>
-                <p className="text-xs text-neutral-500">Her satir adet kadar ayri top olarak kaydolur.</p>
+                <div className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Hizli Top Girisi</div>
+                <p className="text-xs text-neutral-500">Metre ve adet girip Enter ile listeye ekleyin. Islemi en son Kaydet ile tamamlayin.</p>
               </div>
               <div className="mt-3 space-y-2">
                 {addRows.map((row, index) => (
-                  <div key={row.id} className="grid gap-2 sm:grid-cols-[minmax(0,1fr),minmax(0,1fr),auto]">
+                  <div key={row.id} className="grid gap-2 sm:grid-cols-[minmax(0,1fr),minmax(0,1fr)]">
                     <input
+                      ref={(node) => {
+                        addMeterInputRefs.current[row.id] = node;
+                      }}
                       type="number"
                       min="0"
                       step="0.01"
                       value={row.meters}
                       onChange={(event) => updateAddRow(row.id, "meters", event.target.value)}
+                      onKeyDown={(event) => handleAddRowMetersKeyDown(event, row.id)}
                       placeholder={`Top ${index + 1} metre`}
                       className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
                     />
@@ -2193,32 +2372,54 @@ export default function DepoPage() {
                       step="1"
                       value={row.quantity}
                       onChange={(event) => updateAddRow(row.id, "quantity", event.target.value)}
+                      onKeyDown={(event) => handleAddRowMetersKeyDown(event, row.id)}
                       placeholder="Adet"
                       className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
                     />
-                    <button
-                      type="button"
-                      onClick={() => removeAddRow(row.id)}
-                      disabled={addRows.length === 1}
-                      className="rounded-lg border border-rose-500/30 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Sil
-                    </button>
                   </div>
                 ))}
               </div>
             </div>
             <input type="date" value={addDate} onChange={(e) => setAddDate(e.target.value)} className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
             <input type="text" value={addNote} onChange={(e) => setAddNote(e.target.value)} placeholder="Not (ops)" className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
-            <div className="flex justify-start">
-              <button
-                type="button"
-                onClick={appendAddRow}
-                className="inline-flex items-center gap-1 rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Satir Ekle
-              </button>
+
+            <div className="rounded-xl border border-black/10 bg-white p-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                  Eklenen Toplar
+                </div>
+                <div className="rounded-full border border-black/10 bg-neutral-50 px-2.5 py-1 text-[11px] font-semibold text-neutral-700">
+                  {pendingAddTotals.totalTops} top / {fmt(pendingAddTotals.totalMetres)} m
+                </div>
+              </div>
+              <div className="max-h-[280px] space-y-1 overflow-auto pr-1 text-xs text-neutral-700">
+                {pendingAddEntries.map((entry) => (
+                  <div key={entry.id} className="flex items-center justify-between gap-2 rounded-lg border border-black/5 bg-neutral-50 px-2.5 py-2">
+                    <div>
+                      <div className="font-medium text-neutral-900">
+                        {entry.colorName} / {fmt(entry.meters)} m
+                      </div>
+                      <div>
+                        {entry.quantity} top
+                        {" / "}
+                        Toplam {fmt(entry.totalMetres)} m
+                        {" / "}
+                        {formatDateTime(entry.createdAt)}
+                      </div>
+                    </div>
+                    {canManageWarehouse ? (
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePendingAddEntry(entry.id)}
+                        className="rounded border border-rose-500/30 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100"
+                      >
+                        Sil
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+                {pendingAddEntries.length === 0 ? <div>Kayit yok.</div> : null}
+              </div>
             </div>
           </div>
           {addError ? <p className="mt-3 text-sm text-rose-600">{addError}</p> : null}

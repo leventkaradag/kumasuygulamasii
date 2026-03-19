@@ -1,16 +1,36 @@
 "use client";
 
-import type { Dyehouse, DyehouseJob, DyehouseJobStatus, DyehouseLine } from "@/lib/domain/dyehouse";
+import type {
+  Dyehouse,
+  DyehouseJob,
+  DyehouseJobStatus,
+  DyehouseLine,
+  DyehouseProgressEntry,
+} from "@/lib/domain/dyehouse";
 import type { WeavingDispatchDocument } from "@/lib/domain/weaving";
 
 const STORAGE_KEY = "dokuma:dyehouses";
 const JOBS_STORAGE_KEY = "dyehouse:jobs";
+const PROGRESS_STORAGE_KEY = "dyehouse:progress";
 const JOB_STATUSES: DyehouseJobStatus[] = ["RECEIVED", "IN_PROCESS", "FINISHED", "CANCELLED"];
 
 type ListJobsFilters = {
   dyehouseId?: string;
   status?: DyehouseJobStatus;
   query?: string;
+};
+
+type ListProgressFilters = {
+  jobId?: string;
+};
+
+type AddProgressInput = {
+  jobId: string;
+  meters: number;
+  createdAt?: string;
+  note?: string;
+  metersPerUnit?: number;
+  unitCount?: number;
 };
 
 const canUseStorage = () =>
@@ -67,6 +87,22 @@ const normalizeOptionalNumber = (value: unknown): number | undefined => {
   if (value === null || value === undefined || value === "") return undefined;
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return undefined;
+  return numeric;
+};
+
+const normalizeOptionalPositiveNumber = (value: unknown): number | undefined => {
+  if (value === null || value === undefined || value === "") return undefined;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return undefined;
+  return numeric;
+};
+
+const normalizeOptionalPositiveInteger = (value: unknown): number | undefined => {
+  if (value === null || value === undefined || value === "") return undefined;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || !Number.isInteger(numeric) || numeric <= 0) {
+    return undefined;
+  }
   return numeric;
 };
 
@@ -150,6 +186,35 @@ const normalizeStoredLines = (input: unknown) => {
   return input
     .map((line) => normalizeStoredLine(line))
     .filter((line): line is DyehouseLine => line !== null);
+};
+
+const normalizeStoredProgress = (input: unknown): DyehouseProgressEntry | null => {
+  if (!input || typeof input !== "object") return null;
+  const raw = input as Partial<DyehouseProgressEntry>;
+
+  const jobId = normalizeText(raw.jobId);
+  if (!jobId) return null;
+
+  const meters =
+    typeof raw.meters === "number" && Number.isFinite(raw.meters)
+      ? raw.meters
+      : Number(raw.meters);
+  if (!Number.isFinite(meters) || meters <= 0) return null;
+
+  const createdAtRaw = normalizeText(raw.createdAt) ?? new Date().toISOString();
+  const createdAt = Number.isNaN(new Date(createdAtRaw).getTime())
+    ? new Date().toISOString()
+    : new Date(createdAtRaw).toISOString();
+
+  return {
+    id: normalizeText(raw.id) ?? createId(),
+    jobId,
+    createdAt,
+    meters,
+    metersPerUnit: normalizeOptionalPositiveNumber(raw.metersPerUnit),
+    unitCount: normalizeOptionalPositiveInteger(raw.unitCount) ?? 1,
+    note: normalizeText(raw.note),
+  };
 };
 
 const sumMeters = (lines: DyehouseLine[]) => lines.reduce((sum, line) => sum + line.metersPlanned, 0);
@@ -243,11 +308,26 @@ const writeJobs = (rows: DyehouseJob[]) => {
   window.localStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(rows));
 };
 
+const readProgress = (): DyehouseProgressEntry[] => {
+  if (!canUseStorage()) return [];
+  return safeParseArray<unknown>(window.localStorage.getItem(PROGRESS_STORAGE_KEY))
+    .map(normalizeStoredProgress)
+    .filter((row): row is DyehouseProgressEntry => row !== null);
+};
+
+const writeProgress = (rows: DyehouseProgressEntry[]) => {
+  if (!canUseStorage()) return;
+  window.localStorage.setItem(PROGRESS_STORAGE_KEY, JSON.stringify(rows));
+};
+
 const sortByName = (rows: Dyehouse[]) =>
   [...rows].sort((a, b) => a.name.localeCompare(b.name, "tr-TR"));
 
 const sortJobsByReceivedDesc = (rows: DyehouseJob[]) =>
   [...rows].sort((a, b) => toTimestamp(b.receivedAt) - toTimestamp(a.receivedAt));
+
+const sortProgressByCreatedDesc = (rows: DyehouseProgressEntry[]) =>
+  [...rows].sort((a, b) => toTimestamp(b.createdAt) - toTimestamp(a.createdAt));
 
 export const dyehouseLocalRepo = {
   list(): Dyehouse[] {
@@ -298,6 +378,13 @@ export const dyehouseLocalRepo = {
         name.includes(normalizedQuery) ||
         dyehouse.includes(normalizedQuery)
       );
+    });
+  },
+
+  listProgress(filters?: ListProgressFilters): DyehouseProgressEntry[] {
+    return sortProgressByCreatedDesc(readProgress()).filter((entry) => {
+      if (filters?.jobId && entry.jobId !== filters.jobId) return false;
+      return true;
     });
   },
 
@@ -365,6 +452,40 @@ export const dyehouseLocalRepo = {
 
     jobs.push(next);
     writeJobs(jobs);
+    return next;
+  },
+
+  addProgress(input: AddProgressInput): DyehouseProgressEntry {
+    const normalizedJobId = normalizeRequiredText(input.jobId, "Is emri");
+    const job = readJobs().find((row) => row.id === normalizedJobId);
+    if (!job) throw new Error("Is emri bulunamadi.");
+
+    const normalizedMeters = normalizePositiveNumber(input.meters, "Metre");
+    const unitCount = normalizeOptionalPositiveInteger(input.unitCount) ?? 1;
+    const metersPerUnit =
+      normalizeOptionalPositiveNumber(input.metersPerUnit) ??
+      (unitCount > 0 ? normalizedMeters / unitCount : undefined);
+
+    if (
+      metersPerUnit !== undefined &&
+      Math.abs(metersPerUnit * unitCount - normalizedMeters) > 1e-6
+    ) {
+      throw new Error("Toplam ilerleme, metre x adet ile uyusmuyor.");
+    }
+
+    const next: DyehouseProgressEntry = {
+      id: createId(),
+      jobId: job.id,
+      createdAt: toIsoDate(input.createdAt ?? new Date().toISOString(), "createdAt"),
+      meters: normalizedMeters,
+      metersPerUnit,
+      unitCount,
+      note: normalizeText(input.note),
+    };
+
+    const entries = readProgress();
+    entries.push(next);
+    writeProgress(entries);
     return next;
   },
 
@@ -460,6 +581,24 @@ export const dyehouseLocalRepo = {
     const next = jobs.filter((job) => job.id !== normalizedId);
     if (next.length === jobs.length) return false;
     writeJobs(next);
+
+    const progressEntries = readProgress();
+    const nextProgressEntries = progressEntries.filter((entry) => entry.jobId !== normalizedId);
+    if (nextProgressEntries.length !== progressEntries.length) {
+      writeProgress(nextProgressEntries);
+    }
+
+    return true;
+  },
+
+  deleteProgress(id: string): boolean {
+    const normalizedId = normalizeText(id);
+    if (!normalizedId) return false;
+
+    const entries = readProgress();
+    const next = entries.filter((entry) => entry.id !== normalizedId);
+    if (next.length === entries.length) return false;
+    writeProgress(next);
     return true;
   },
 };
