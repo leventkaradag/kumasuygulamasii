@@ -9,7 +9,7 @@ import { cn } from "@/lib/cn";
 import type { Pattern, Variant } from "@/lib/domain/pattern";
 import { getPatternDigitalImageSrc, getPatternFinalImageSrc } from "@/lib/patternImage";
 import { getFallbackPatternMetricSummary, type PatternMetricSummary } from "@/lib/patternMetrics";
-import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
+import { patternsSupabaseRepo } from "@/lib/repos/patternsSupabaseRepo";
 import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 
 type PatternDetailPanelProps = {
@@ -172,6 +172,7 @@ export function PatternDetailPanel({
 
   useModalFocusTrap({ enabled: showMetersModal, containerRef: metersModalRef });
   const [logisticsStatus, setLogisticsStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const [asyncError, setAsyncError] = useState<string | null>(null);
 
   const resetNoteStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resetImageStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -183,7 +184,7 @@ export function PatternDetailPanel({
   const canDeletePattern = permissions.patterns.delete;
 
   useEffect(() => {
-    const latestPattern = pattern ? patternsLocalRepo.get(pattern.id) ?? pattern : null;
+    const latestPattern = pattern;
 
     const initialNote = latestPattern?.note ?? "";
     setNote(initialNote);
@@ -401,17 +402,20 @@ export function PatternDetailPanel({
     }
 
     setNoteStatus("saving");
-
+    setAsyncError(null);
     const nextNote = note.trim();
-    patternsLocalRepo.update(pattern.id, { note: nextNote });
-    setNote(nextNote);
-    setSavedNote(nextNote);
-    setNoteStatus("saved");
-
-    resetNoteStatusTimerRef.current = setTimeout(() => {
+    patternsSupabaseRepo.update(pattern.id, { note: nextNote }).then(() => {
+      setNote(nextNote);
+      setSavedNote(nextNote);
+      setNoteStatus("saved");
+      resetNoteStatusTimerRef.current = setTimeout(() => {
+        setNoteStatus("idle");
+        resetNoteStatusTimerRef.current = null;
+      }, 1200);
+    }).catch((err: unknown) => {
       setNoteStatus("idle");
-      resetNoteStatusTimerRef.current = null;
-    }, 1200);
+      setAsyncError(err instanceof Error ? err.message : "Not kaydedilemedi.");
+    });
   };
 
   const handlePickDigital = async (file?: File) => {
@@ -442,7 +446,7 @@ export function PatternDetailPanel({
     }
 
     setImageStatus("saving");
-
+    setAsyncError(null);
     const patch: Partial<Pattern> = {};
     if (pendingDigitalUrl !== undefined) {
       patch.imageDigital = pendingDigitalUrl;
@@ -453,24 +457,24 @@ export function PatternDetailPanel({
       patch.finalImageUrl = pendingFinalUrl ?? undefined;
     }
 
-    const updated = patternsLocalRepo.update(pattern.id, patch);
-    if (updated) {
-      setSavedDigitalUrl(getPatternDigitalImageSrc(updated) ?? undefined);
-      setSavedFinalUrl(getPatternFinalImageSrc(updated) ?? undefined);
-    }
-    setPendingDigitalUrl(undefined);
-    setPendingFinalUrl(undefined);
-    onImagePreviewChange?.(pattern.id, {
-      digitalPreviewUrl: undefined,
-      finalPreviewUrl: undefined,
-    });
-    onPatternUpdated?.(updated);
-    setImageStatus("saved");
-
-    resetImageStatusTimerRef.current = setTimeout(() => {
+    patternsSupabaseRepo.update(pattern.id, patch).then((updated) => {
+      if (updated) {
+        setSavedDigitalUrl(getPatternDigitalImageSrc(updated) ?? undefined);
+        setSavedFinalUrl(getPatternFinalImageSrc(updated) ?? undefined);
+        onPatternUpdated?.(updated);
+      }
+      setPendingDigitalUrl(undefined);
+      setPendingFinalUrl(undefined);
+      onImagePreviewChange?.(pattern.id, { digitalPreviewUrl: undefined, finalPreviewUrl: undefined });
+      setImageStatus("saved");
+      resetImageStatusTimerRef.current = setTimeout(() => {
+        setImageStatus("idle");
+        resetImageStatusTimerRef.current = null;
+      }, 1200);
+    }).catch((err: unknown) => {
       setImageStatus("idle");
-      resetImageStatusTimerRef.current = null;
-    }, 1200);
+      setAsyncError(err instanceof Error ? err.message : "Görsel kaydedilemedi.");
+    });
   };
 
   const displayedDigitalUrl =
@@ -566,15 +570,18 @@ export function PatternDetailPanel({
 
     setMetersError("");
     setMetersStatus("saving");
-
-    patternsLocalRepo.update(pattern.id, patch);
-    setMetersStatus("saved");
-    setShowMetersModal(false);
-
-    resetMetersStatusTimerRef.current = setTimeout(() => {
+    setAsyncError(null);
+    patternsSupabaseRepo.update(pattern.id, patch).then(() => {
+      setMetersStatus("saved");
+      setShowMetersModal(false);
+      resetMetersStatusTimerRef.current = setTimeout(() => {
+        setMetersStatus("idle");
+        resetMetersStatusTimerRef.current = null;
+      }, 1200);
+    }).catch((err: unknown) => {
       setMetersStatus("idle");
-      resetMetersStatusTimerRef.current = null;
-    }, 1200);
+      setMetersError(err instanceof Error ? err.message : "Metre güncellenemedi.");
+    });
   };
 
   const persistVariants = (nextVariants: Variant[]) => {
@@ -600,16 +607,19 @@ export function PatternDetailPanel({
       lastStockInAt: variant.lastStockInAt,
     }));
 
-    const updated = patternsLocalRepo.update(pattern.id, { variants: normalizedNext });
-    const refreshed = normalizeVariants(updated?.variants ?? normalizedNext);
-    setVariantsDraft(refreshed);
-    onPatternUpdated?.(updated);
-    setVariantsStatus("saved");
-
-    resetVariantsStatusTimerRef.current = setTimeout(() => {
+    patternsSupabaseRepo.update(pattern.id, { variants: normalizedNext }).then((updated) => {
+      const refreshed = normalizeVariants(updated?.variants ?? normalizedNext);
+      setVariantsDraft(refreshed);
+      onPatternUpdated?.(updated);
+      setVariantsStatus("saved");
+      resetVariantsStatusTimerRef.current = setTimeout(() => {
+        setVariantsStatus("idle");
+        resetVariantsStatusTimerRef.current = null;
+      }, 1200);
+    }).catch((err: unknown) => {
       setVariantsStatus("idle");
-      resetVariantsStatusTimerRef.current = null;
-    }, 1200);
+      setAsyncError(err instanceof Error ? err.message : "Varyantlar kaydedilemedi.");
+    });
   };
 
   const handleAddVariant = () => {
@@ -661,7 +671,7 @@ export function PatternDetailPanel({
 
   const openLogisticsEditor = () => {
     if (!canEditPattern) return;
-    const latestPattern = patternsLocalRepo.get(pattern.id) ?? pattern;
+    const latestPattern = pattern;
     if (resetLogisticsStatusTimerRef.current) {
       clearTimeout(resetLogisticsStatusTimerRef.current);
       resetLogisticsStatusTimerRef.current = null;
@@ -673,7 +683,7 @@ export function PatternDetailPanel({
   };
 
   const handleCancelLogistics = () => {
-    const latestPattern = patternsLocalRepo.get(pattern.id) ?? pattern;
+    const latestPattern = pattern;
     if (resetLogisticsStatusTimerRef.current) {
       clearTimeout(resetLogisticsStatusTimerRef.current);
       resetLogisticsStatusTimerRef.current = null;
@@ -731,19 +741,18 @@ export function PatternDetailPanel({
       createdAt,
     };
 
-    const updated = patternsLocalRepo.update(pattern.id, patch);
-    if (updated) {
-      setLogisticsDraft(createLogisticsDraft(updated));
-      onPatternUpdated?.(updated);
-    }
-
-    setIsEditingLogistics(false);
-    setLogisticsStatus("saved");
-
-    resetLogisticsStatusTimerRef.current = setTimeout(() => {
-      setLogisticsStatus("idle");
-      resetLogisticsStatusTimerRef.current = null;
-    }, 1200);
+    patternsSupabaseRepo.update(pattern.id, patch).then((updated) => {
+      if (updated) {
+        setLogisticsDraft(createLogisticsDraft(updated));
+        onPatternUpdated?.(updated);
+      }
+      setIsEditingLogistics(false);
+      setLogisticsStatus("saved");
+      resetLogisticsStatusTimerRef.current = setTimeout(() => {
+        setLogisticsStatus("idle");
+        resetLogisticsStatusTimerRef.current = null;
+      }, 1200);
+    });
   };
 
   const handleArchive = () => {
@@ -756,15 +765,18 @@ export function PatternDetailPanel({
     }
 
     setArchiveStatus("saving");
-
-    const updated = patternsLocalRepo.archivePattern(pattern.id);
-    onPatternUpdated?.(updated);
-    setArchiveStatus("saved");
-
-    resetArchiveStatusTimerRef.current = setTimeout(() => {
+    setAsyncError(null);
+    patternsSupabaseRepo.archivePattern(pattern.id).then((updated) => {
+      onPatternUpdated?.(updated);
+      setArchiveStatus("saved");
+      resetArchiveStatusTimerRef.current = setTimeout(() => {
+        setArchiveStatus("idle");
+        resetArchiveStatusTimerRef.current = null;
+      }, 1200);
+    }).catch((err: unknown) => {
       setArchiveStatus("idle");
-      resetArchiveStatusTimerRef.current = null;
-    }, 1200);
+      setAsyncError(err instanceof Error ? err.message : "Arşivleme başarısız.");
+    });
   };
 
   const handleRestorePattern = () => {
@@ -777,15 +789,18 @@ export function PatternDetailPanel({
     }
 
     setArchiveStatus("saving");
-
-    const updated = patternsLocalRepo.restorePattern(pattern.id);
-    onPatternUpdated?.(updated);
-    setArchiveStatus("saved");
-
-    resetArchiveStatusTimerRef.current = setTimeout(() => {
+    setAsyncError(null);
+    patternsSupabaseRepo.restorePattern(pattern.id).then((updated) => {
+      onPatternUpdated?.(updated);
+      setArchiveStatus("saved");
+      resetArchiveStatusTimerRef.current = setTimeout(() => {
+        setArchiveStatus("idle");
+        resetArchiveStatusTimerRef.current = null;
+      }, 1200);
+    }).catch((err: unknown) => {
       setArchiveStatus("idle");
-      resetArchiveStatusTimerRef.current = null;
-    }, 1200);
+      setAsyncError(err instanceof Error ? err.message : "Arşivden çıkarma başarısız.");
+    });
   };
 
   const handleDeletePattern = () => {
@@ -800,14 +815,18 @@ export function PatternDetailPanel({
     }
 
     setArchiveStatus("saving");
-    patternsLocalRepo.deletePatternHard(pattern.id);
-    onPatternUpdated?.(undefined);
-    setArchiveStatus("saved");
-
-    resetArchiveStatusTimerRef.current = setTimeout(() => {
+    setAsyncError(null);
+    patternsSupabaseRepo.remove(pattern.id).then(() => {
+      onPatternUpdated?.(undefined);
+      setArchiveStatus("saved");
+      resetArchiveStatusTimerRef.current = setTimeout(() => {
+        setArchiveStatus("idle");
+        resetArchiveStatusTimerRef.current = null;
+      }, 1200);
+    }).catch((err: unknown) => {
       setArchiveStatus("idle");
-      resetArchiveStatusTimerRef.current = null;
-    }, 1200);
+      setAsyncError(err instanceof Error ? err.message : "Silme işlemi başarısız.");
+    });
   };
 
   const showArchivedActions = showArchived;
@@ -893,6 +912,11 @@ export function PatternDetailPanel({
           >
             {archiveStatusText || " "}
           </p>
+          {asyncError && (
+            <span className="rounded-xl border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-700">
+              {asyncError}
+            </span>
+          )}
           {canEditPattern ? (
             <button
               type="button"

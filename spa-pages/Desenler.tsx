@@ -11,8 +11,7 @@ import type { Pattern } from "@/lib/domain/pattern";
 import type { PatternImageFields } from "@/lib/patternImage";
 import { Stage } from "@/lib/domain/movement";
 import { buildPatternMetricMap } from "@/lib/patternMetrics";
-import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
-import { patternsRepo } from "@/lib/repos/patternsRepo";
+import { patternsSupabaseRepo } from "@/lib/repos/patternsSupabaseRepo";
 import { cn } from "@/lib/cn";
 import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 
@@ -29,7 +28,7 @@ const sortPatternsByStage = (items: Pattern[]) =>
     return a.fabricCode.localeCompare(b.fabricCode, "tr-TR");
   });
 
-const seedPatterns = sortPatternsByStage(patternsRepo.list());
+const seedPatterns: Pattern[] = [];
 
 type PatternTab = "ACTIVE" | "ARCHIVE";
 
@@ -194,13 +193,28 @@ export default function DesenlerPage() {
   const [filters, setFilters] = useState<PatternFilters>({});
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const filterModalRef = useRef<HTMLDivElement | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(seedPatterns[0]?.id ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showPatternModal, setShowPatternModal] = useState(false);
   const [patternModalMode, setPatternModalMode] = useState<"add" | "edit">("edit");
+  const [isLoading, setIsLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const showArchived = activeTab === "ARCHIVE";
 
   useEffect(() => {
-    setPatterns(sortPatternsByStage(patternsLocalRepo.list()));
+    let mounted = true;
+    patternsSupabaseRepo.list().then((data) => {
+      if (!mounted) return;
+      const sorted = sortPatternsByStage(data);
+      setPatterns(sorted);
+      setSelectedId(sorted[0]?.id ?? null);
+      setIsLoading(false);
+    }).catch((err: unknown) => {
+      if (!mounted) return;
+      const msg = err instanceof Error ? err.message : "Desenler yüklenemedi.";
+      setFetchError(msg);
+      setIsLoading(false);
+    });
+    return () => { mounted = false; };
   }, []);
 
   const displayPatterns = useMemo(
@@ -245,20 +259,26 @@ export default function DesenlerPage() {
   const modalPattern = patternModalMode === "add" ? emptyPatternForCreate : selectedPattern;
 
   const refreshPatterns = (preferredId?: string, forceResetSelection = false) => {
-    const refreshed = sortPatternsByStage(patternsLocalRepo.list());
-    setPatterns(refreshed);
+    patternsSupabaseRepo.list().then((data) => {
+      setFetchError(null);
+      const refreshed = sortPatternsByStage(data);
+      setPatterns(refreshed);
 
-    const refreshedFiltered = getFilteredPatterns(refreshed, showArchived, search, filters);
-    if (preferredId && refreshedFiltered.some((pattern) => pattern.id === preferredId)) {
-      setSelectedId(preferredId);
-      return;
-    }
+      const refreshedFiltered = getFilteredPatterns(refreshed, showArchived, search, filters);
+      if (preferredId && refreshedFiltered.some((pattern) => pattern.id === preferredId)) {
+        setSelectedId(preferredId);
+        return;
+      }
 
-    if (!forceResetSelection && selectedId && refreshedFiltered.some((pattern) => pattern.id === selectedId)) {
-      return;
-    }
+      if (!forceResetSelection && selectedId && refreshedFiltered.some((pattern) => pattern.id === selectedId)) {
+        return;
+      }
 
-    setSelectedId(refreshedFiltered[0]?.id ?? null);
+      setSelectedId(refreshedFiltered[0]?.id ?? null);
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : "Liste güncellenemedi.";
+      setFetchError(msg);
+    });
   };
 
   const handlePatternSave = (savedPattern: Pattern) => {
@@ -452,11 +472,20 @@ export default function DesenlerPage() {
                   onSelect={(id) => setSelectedId(id)}
                 />
               ))}
-              {filteredPatterns.length === 0 && (
+              {fetchError && !isLoading && (
+                <div className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  {fetchError}
+                </div>
+              )}
+              {isLoading ? (
+                <div className="flex items-center justify-center rounded-xl px-4 py-10 text-sm text-neutral-500">
+                  Yükleniyor...
+                </div>
+              ) : filteredPatterns.length === 0 && !fetchError ? (
                 <div className="flex items-center justify-center rounded-xl border border-dashed border-black/10 bg-coffee-surface px-4 py-10 text-sm text-neutral-500">
                   Arama sonucu bulunamadı
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
 

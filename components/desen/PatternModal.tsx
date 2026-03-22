@@ -7,10 +7,10 @@ import type { Stage } from "@/lib/domain/movement";
 import type { Pattern } from "@/lib/domain/pattern";
 import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 import {
-  patternsLocalRepo,
+  patternsSupabaseRepo,
   type PatternMetersTarget,
   type UpsertPatternFromFormPayload,
-} from "@/lib/repos/patternsLocalRepo";
+} from "@/lib/repos/patternsSupabaseRepo";
 
 type Props = {
   pattern: Pattern;
@@ -99,6 +99,7 @@ export function PatternModal({ pattern, onClose, onSave }: Props) {
   const [error, setError] = useState("");
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const canSavePattern = pattern.id ? permissions.patterns.edit : permissions.patterns.create;
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -132,12 +133,12 @@ export function PatternModal({ pattern, onClose, onSave }: Props) {
 
   useModalFocusTrap({ enabled: mounted, containerRef: dialogRef });
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
 
-    if (!canSavePattern) {
-      setError("Bu hesap desen kaydi guncelleyemez.");
+    if (!canSavePattern || isSaving) {
+      setError("Bu hesap desen kaydi guncelleyemez veya islem devam ediyor.");
       return;
     }
 
@@ -174,9 +175,16 @@ export function PatternModal({ pattern, onClose, onSave }: Props) {
       metersTarget,
     };
 
-    const savedPattern = patternsLocalRepo.upsertPatternFromForm(payload);
-    onSave(savedPattern);
-    onClose();
+    setIsSaving(true);
+    try {
+      const savedPattern = await patternsSupabaseRepo.upsertPatternFromForm(payload);
+      onSave(savedPattern);
+      onClose();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Kayit sirasinda bir hata olustu.";
+      setError(msg);
+      setIsSaving(false);
+    }
   };
 
   if (!mounted) return null;
@@ -288,10 +296,10 @@ export function PatternModal({ pattern, onClose, onSave }: Props) {
             </button>
             <button
               type="submit"
-              disabled={!canSavePattern}
-              className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white hover:bg-coffee-primary/90"
+              disabled={!canSavePattern || isSaving}
+              className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white hover:bg-coffee-primary/90 disabled:opacity-60"
             >
-              Kaydet
+              {isSaving ? "Kaydediliyor..." : "Kaydet"}
             </button>
           </div>
         </form>

@@ -24,9 +24,9 @@ import type { WeavingPlan, WeavingProgressEntry } from "@/lib/domain/weaving";
 import { downloadDepoDailyEntryReportXlsx } from "@/lib/export/depoDailyEntryExcel";
 import { buildPatternNoteHistory, type PatternNoteEntry } from "@/lib/patternNoteHistory";
 import { customersLocalRepo, normalizeCustomerName } from "@/lib/repos/customersLocalRepo";
-import { depoLocalRepo } from "@/lib/repos/depoLocalRepo";
+import { depoSupabaseRepo } from "@/lib/repos/depoSupabaseRepo";
 import { depoTransactionsLocalRepo } from "@/lib/repos/depoTransactionsLocalRepo";
-import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
+import { patternsSupabaseRepo } from "@/lib/repos/patternsSupabaseRepo";
 import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
 import { buildDepoDailyEntryReport } from "@/lib/summary/depoDailyEntryReport";
 import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
@@ -517,6 +517,8 @@ export default function DepoPage() {
   const [rollSearch, setRollSearch] = useState("");
   const [rollStatus, setRollStatus] = useState<FabricRollStatus | "">("");
 
+  const [isLoadingRolls, setIsLoadingRolls] = useState(true);
+  const [rollsError, setRollsError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [addVariantId, setAddVariantId] = useState("__other");
   const [addColorName, setAddColorName] = useState("");
@@ -577,30 +579,44 @@ export default function DepoPage() {
     permissions.reservation.edit ||
     permissions.reservation.delete;
 
+  // Sync: transactions, customers, weaving (still localStorage)
+  const refreshSyncData = () => {
+    setCustomers(customersLocalRepo.list());
+    setTransactions(depoTransactionsLocalRepo.listTransactions());
+    setTransactionLines(depoTransactionsLocalRepo.listLines());
+    setWeavingPlans(weavingLocalRepo.listPlans());
+    setWeavingProgressEntries(weavingLocalRepo.listProgress());
+  };
+
+  // Async: patterns + rolls from Supabase
   const refreshData = (preferredPatternId?: string | null) => {
-    const nextPatterns = sortPatterns(patternsLocalRepo.list().filter(isPatternVisible));
-    const nextRolls = depoLocalRepo.listRolls();
-    const nextCustomers = customersLocalRepo.list();
-    const nextTransactions = depoTransactionsLocalRepo.listTransactions();
-    const nextTransactionLines = depoTransactionsLocalRepo.listLines();
-    const nextWeavingPlans = weavingLocalRepo.listPlans();
-    const nextWeavingProgressEntries = weavingLocalRepo.listProgress();
-    setPatterns(nextPatterns);
-    setRolls(nextRolls);
-    setCustomers(nextCustomers);
-    setTransactions(nextTransactions);
-    setTransactionLines(nextTransactionLines);
-    setWeavingPlans(nextWeavingPlans);
-    setWeavingProgressEntries(nextWeavingProgressEntries);
-    setSelectedPatternId((currentId) => {
-      if (preferredPatternId && nextPatterns.some((p) => p.id === preferredPatternId)) return preferredPatternId;
-      if (currentId && nextPatterns.some((p) => p.id === currentId)) return currentId;
-      return nextPatterns[0]?.id ?? null;
+    refreshSyncData();
+    setIsLoadingRolls(true);
+    setRollsError(null);
+
+    Promise.all([
+      patternsSupabaseRepo.list(),
+      depoSupabaseRepo.listRolls(),
+    ]).then(([fetchedPatterns, fetchedRolls]) => {
+      const nextPatterns = sortPatterns(fetchedPatterns.filter(isPatternVisible));
+      setPatterns(nextPatterns);
+      setRolls(fetchedRolls);
+      setIsLoadingRolls(false);
+      setSelectedPatternId((currentId) => {
+        if (preferredPatternId && nextPatterns.some((p) => p.id === preferredPatternId)) return preferredPatternId;
+        if (currentId && nextPatterns.some((p) => p.id === currentId)) return currentId;
+        return nextPatterns[0]?.id ?? null;
+      });
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : "Veriler yueklenemedi.";
+      setRollsError(msg);
+      setIsLoadingRolls(false);
     });
   };
 
   useEffect(() => {
     refreshData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fromBoundary = useMemo(() => parseBoundary(dateFrom, false), [dateFrom]);
@@ -1003,7 +1019,7 @@ export default function DepoPage() {
     }));
   };
 
-  const persistPendingAddEntries = (entries: PendingAddEntry[]) => {
+  const persistPendingAddEntries = async (entries: PendingAddEntry[]) => {
     if (entries.length === 0) {
       throw new Error("En az bir top girisi ekleyiniz.");
     }
@@ -1017,7 +1033,8 @@ export default function DepoPage() {
       }
     >();
 
-    entries.forEach((entry) => {
+    // Add rolls to Supabase in parallel per entry
+    for (const entry of entries) {
       const groupKey = JSON.stringify([entry.createdAt, entry.note ?? ""]);
       if (!groupedAddedRolls.has(groupKey)) {
         groupedAddedRolls.set(groupKey, {
@@ -1026,21 +1043,20 @@ export default function DepoPage() {
           rolls: [],
         });
       }
-
       const group = groupedAddedRolls.get(groupKey)!;
-      for (let index = 0; index < entry.quantity; index += 1) {
-        group.rolls.push(
-          depoLocalRepo.addRoll({
-            patternId: entry.patternId,
-            variantId: entry.variantId,
-            colorName: entry.colorName || undefined,
-            meters: entry.meters,
-            inAt: entry.createdAt,
-            note: entry.note,
-          })
-        );
-      }
-    });
+      const addPromises = Array.from({ length: entry.quantity }, () =>
+        depoSupabaseRepo.addRoll({
+          patternId: entry.patternId,
+          variantId: entry.variantId,
+          colorName: entry.colorName || undefined,
+          meters: entry.meters,
+          inAt: entry.createdAt,
+          note: entry.note,
+        })
+      );
+      const addedRolls = await Promise.all(addPromises);
+      group.rolls.push(...addedRolls);
+    }
 
     const combinedSummaryLines: TransactionLineInput[] = [];
     groupedAddedRolls.forEach((group) => {
@@ -1065,7 +1081,7 @@ export default function DepoPage() {
     };
   };
 
-  const handleAddRoll = () => {
+  const handleAddRoll = async () => {
     if (!canManageWarehouse) return;
     if (!selectedPattern) return;
     try {
@@ -1075,7 +1091,7 @@ export default function DepoPage() {
         ? buildPendingAddEntriesFromParsedRows(parseRollInputRows(addRowsToPersist, "Top"), note)
         : [];
       const entriesToPersist = [...pendingAddEntries, ...currentRowEntries];
-      const { createdAt, summaryLines } = persistPendingAddEntries(entriesToPersist);
+      const { createdAt, summaryLines } = await persistPendingAddEntries(entriesToPersist);
 
       setOperationSummary(
         buildOperationSummary(
@@ -1219,7 +1235,7 @@ export default function DepoPage() {
     }
   };
 
-  const handleAddReturn = () => {
+  const handleAddReturn = async () => {
     if (!canManageWarehouse) return;
     if (!returnSelectedPattern) return;
 
@@ -1243,19 +1259,21 @@ export default function DepoPage() {
           : variant?.colorName ?? variant?.name ?? "";
       if (!colorName && !variant) throw new Error("Renk seciniz.");
 
-      const addedRolls = parsedRows.flatMap((row) =>
-        Array.from({ length: row.quantity }, () =>
-          depoLocalRepo.addRoll({
-            patternId: returnSelectedPattern.id,
-            variantId: variant?.id,
-            colorName: colorName || undefined,
-            meters: row.meters,
-            inAt,
-            counterparty: customer.nameOriginal,
-            note: returnNote.trim() || undefined,
-          })
+      const addedRolls = (await Promise.all(
+        parsedRows.flatMap((row) =>
+          Array.from({ length: row.quantity }, () =>
+            depoSupabaseRepo.addRoll({
+              patternId: returnSelectedPattern.id,
+              variantId: variant?.id,
+              colorName: colorName || undefined,
+              meters: row.meters,
+              inAt,
+              counterparty: customer.nameOriginal,
+              note: returnNote.trim() || undefined,
+            })
+          )
         )
-      );
+      ));
       const lineInputs = buildTransactionLineInputsFromRolls(addedRolls, patternsById);
 
       depoTransactionsLocalRepo.createTransaction({
@@ -1398,7 +1416,7 @@ export default function DepoPage() {
     return customers.find((customer) => customer.nameNormalized === normalizedBulkCustomer);
   }, [customers, normalizedBulkCustomer]);
 
-  const handleBulkActionConfirm = () => {
+  const handleBulkActionConfirm = async () => {
     if (!bulkActionType) return;
     if ((bulkActionType === "SHIPMENT" && !canCreateShipment) || (bulkActionType === "RESERVATION" && !canCreateReservation)) {
       return;
@@ -1421,16 +1439,19 @@ export default function DepoPage() {
       let failedRollCount = 0;
       const failedItemLabels: string[] = [];
 
-      basketItems.forEach((lineDraft) => {
+      for (const lineDraft of basketItems) {
         const successRollIds: string[] = [];
 
-        lineDraft.rollIds.forEach((rollId) => {
-          const updated =
+        const rollResults = await Promise.all(
+          lineDraft.rollIds.map((rollId) =>
             bulkActionType === "SHIPMENT"
-              ? depoLocalRepo.shipRoll(rollId, customer!.nameOriginal, createdAt)
-              : depoLocalRepo.reserveRoll(rollId, customer!.nameOriginal, createdAt);
+              ? depoSupabaseRepo.shipRoll(rollId, customer!.nameOriginal, createdAt)
+              : depoSupabaseRepo.reserveRoll(rollId, customer!.nameOriginal, createdAt)
+          )
+        );
 
-          if (updated) successRollIds.push(rollId);
+        rollResults.forEach((updated, idx) => {
+          if (updated) successRollIds.push(lineDraft.rollIds[idx]);
           else failedRollCount += 1;
         });
 
@@ -1450,7 +1471,7 @@ export default function DepoPage() {
             `${lineDraft.patternNoSnapshot} - ${lineDraft.patternNameSnapshot}`
           );
         }
-      });
+      }
 
       if (lineInputs.length === 0) {
         const failedInfo =
@@ -1566,7 +1587,7 @@ export default function DepoPage() {
     return `${uniqueColors[0]}, ${uniqueColors[1]}, ${uniqueColors[2]} +${uniqueColors.length - 3} renk`;
   }, [detailRow]);
 
-  const handleReverseTransaction = () => {
+  const handleReverseTransaction = async () => {
     if (!canReverseTransactions) return;
     if (!detailRow) return;
     const target = detailRow.transaction;
@@ -1579,17 +1600,20 @@ export default function DepoPage() {
       const reversalLines: Array<Omit<DepoTransactionLine, "id" | "transactionId">> = [];
       let failedCount = 0;
 
-      detailRow.lines.forEach((line) => {
+      for (const line of detailRow.lines) {
         const candidateRollIds = [...(line.rollIds ?? [])];
         const successRollIds: string[] = [];
 
-        candidateRollIds.forEach((rollId) => {
-          const updated =
+        const rollResults = await Promise.all(
+          candidateRollIds.map((rollId) =>
             target.type === "SHIPMENT"
-              ? depoLocalRepo.returnRoll(rollId, createdAt)
-              : depoLocalRepo.unreserveRoll(rollId);
+              ? depoSupabaseRepo.returnRoll(rollId, createdAt)
+              : depoSupabaseRepo.unreserveRoll(rollId)
+          )
+        );
 
-          if (updated) successRollIds.push(rollId);
+        rollResults.forEach((updated, idx) => {
+          if (updated) successRollIds.push(candidateRollIds[idx]);
           else failedCount += 1;
         });
 
@@ -1605,7 +1629,7 @@ export default function DepoPage() {
             rollIds: successRollIds,
           });
         }
-      });
+      }
 
       if (reversalLines.length === 0) throw new Error("Geri alinabilecek satir bulunamadi.");
 
@@ -1649,7 +1673,7 @@ export default function DepoPage() {
     [editRollId, rolls]
   );
 
-  const handleSaveRollEdit = () => {
+  const handleSaveRollEdit = async () => {
     if (!canManageWarehouse) return;
     if (!editingRoll) return;
     try {
@@ -1657,7 +1681,7 @@ export default function DepoPage() {
       const nextColorName = editColorName.trim();
       if (!nextColorName) throw new Error("Renk gerekli.");
 
-      const updated = depoLocalRepo.editRoll(editingRoll.id, {
+      const updated = await depoSupabaseRepo.editRoll(editingRoll.id, {
         meters: nextMeters,
         rollNo: editRollNo.trim() || undefined,
         colorName: nextColorName,
@@ -1709,14 +1733,14 @@ export default function DepoPage() {
     [voidRollId, rolls]
   );
 
-  const handleVoidRoll = () => {
+  const handleVoidRoll = async () => {
     if (!canManageWarehouse) return;
     if (!voidingRoll) return;
 
     try {
       const createdAt = new Date().toISOString();
       const reason = voidReason.trim() || "Manuel kaldirma";
-      const updated = depoLocalRepo.voidRoll(voidingRoll.id, createdAt, reason);
+      const updated = await depoSupabaseRepo.voidRoll(voidingRoll.id, createdAt, reason);
       if (!updated) {
         throw new Error("Sadece stokta olan top kaldirilabilir.");
       }
@@ -1752,6 +1776,18 @@ export default function DepoPage() {
   return (
     <Layout title="Depo">
       <div className="flex h-full min-h-0 flex-col gap-4">
+        {rollsError && (
+          <div className="rounded-xl border border-red-500/30 bg-red-50 p-4 text-sm text-red-800">
+            <p className="font-semibold text-red-900">Veriler Yüklenirken Hata Oluştu</p>
+            <p className="mt-1">{rollsError}</p>
+            <button
+              onClick={() => refreshData(selectedPatternId)}
+              className="mt-3 rounded bg-white px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-inset ring-red-500/20 hover:bg-neutral-50"
+            >
+              Tekrar Dene
+            </button>
+          </div>
+        )}
         <div className="grid gap-3 md:grid-cols-3">
           <SummaryCard title="Toplam" meters={totalRolls.reduce((t, r) => t + r.meters, 0)} rolls={totalRolls.length} tone="neutral" />
           <SummaryCard title="Rezerve" meters={reservedRolls.reduce((t, r) => t + r.meters, 0)} rolls={reservedRolls.length} tone="amber" />
@@ -1860,7 +1896,15 @@ export default function DepoPage() {
                     </div>
                   </button>
                 ))}
-                {filteredPatterns.length === 0 ? <div className="rounded-xl border border-dashed border-black/10 bg-coffee-surface px-3 py-10 text-center text-sm text-neutral-500">Filtreye uygun desen yok.</div> : null}
+                {isLoadingRolls ? (
+                  <div className="rounded-xl border border-dashed border-black/10 bg-coffee-surface px-3 py-10 text-center text-sm font-semibold text-coffee-primary/70 animate-pulse">
+                    Yükleniyor...
+                  </div>
+                ) : filteredPatterns.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-black/10 bg-coffee-surface px-3 py-10 text-center text-sm text-neutral-500">
+                    Filtreye uygun desen yok.
+                  </div>
+                ) : null}
               </div>
             </div>
           </aside>

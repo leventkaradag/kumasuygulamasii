@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { Movement, Stage } from "@/lib/domain/movement";
 import { Pattern } from "@/lib/domain/pattern";
 import { movementsLocalRepo } from "@/lib/repos/movementsLocalRepo";
-import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
+import { patternsSupabaseRepo } from "@/lib/repos/patternsSupabaseRepo";
 import { MovementModal } from "@/components/desen/MovementModal";
 
 type StageStock = Record<Stage, number>;
@@ -30,12 +30,25 @@ export default function PatternDetailPage() {
   const [pattern, setPattern] = useState<Pattern | null>(null);
   const [movements, setMovements] = useState<Movement[]>([]);
   const [showModal, setShowModal] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!patternId) return;
-    const found = patternsLocalRepo.get(patternId) ?? null;
-    setPattern(found);
-    setMovements(movementsLocalRepo.list(patternId));
+    let mounted = true;
+    setIsLoading(true);
+    setFetchError(null);
+    patternsSupabaseRepo.get(patternId).then((found) => {
+      if (!mounted) return;
+      setPattern(found ?? null);
+      setMovements(movementsLocalRepo.list(patternId));
+      setIsLoading(false);
+    }).catch((err: unknown) => {
+      if (!mounted) return;
+      setFetchError(err instanceof Error ? err.message : "Desen yüklenemedi.");
+      setIsLoading(false);
+    });
+    return () => { mounted = false; };
   }, [patternId]);
 
   const stageStock = useMemo(() => {
@@ -89,13 +102,60 @@ export default function PatternDetailPage() {
   const handleSaved = () => {
     if (!patternId) return;
     setMovements(movementsLocalRepo.list(patternId));
-    setPattern(patternsLocalRepo.get(patternId) ?? null);
+    patternsSupabaseRepo.get(patternId).then((found) => {
+      if (found) setPattern(found);
+    });
   };
 
   if (!patternId) {
     return (
       <div className="p-6">
         <p className="text-sm text-neutral-600">Geçersiz desen adresi.</p>
+      </div>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center p-12">
+        <p className="text-sm text-neutral-500">Yükleniyor...</p>
+      </div>
+    );
+  }
+
+  if (fetchError) {
+    return (
+      <div className="p-6">
+        <div className="rounded-lg border border-red-200 bg-red-50 p-6">
+          <p className="text-sm font-medium text-red-700">{fetchError}</p>
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setIsLoading(true);
+                setFetchError(null);
+                patternsSupabaseRepo.get(patternId).then((found) => {
+                  setPattern(found ?? null);
+                  if (found) setMovements(movementsLocalRepo.list(patternId));
+                  setIsLoading(false);
+                }).catch((err: unknown) => {
+                  setFetchError(err instanceof Error ? err.message : "Desen yüklenemedi.");
+                  setIsLoading(false);
+                });
+              }}
+              className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700"
+            >
+              Tekrar dene
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/desenler")}
+              className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm font-medium text-neutral-700"
+            >
+              Listeye dön
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
