@@ -1015,7 +1015,9 @@ function JobModal({
 
       const document = weavingLocalRepo.createDyehouseToWarehouseDispatchDocument({
         sourceJobId: job.id,
+        sourceJobNoSnapshot: job.jobNo,
         sourceDispatchDocId: job.sourceDispatchDocId,
+        sourceDispatchNoSnapshot: sourceDispatch.docNo,
         createdAt: new Date().toISOString(),
         planId: sourceDispatch.planId,
         patternId: job.patternId,
@@ -1024,7 +1026,8 @@ function JobModal({
         lines: job.lines.map((line) => ({
           colorNameSnapshot: line.colorName,
           variantCodeSnapshot: line.variantCode,
-          meters: line.metersPlanned,
+          meters: line.incomingQuantityMeters ?? line.metersPlanned ?? 0,
+          kg: line.cleanKg ?? null,
         })),
         note: jobNotes.trim() || undefined,
       });

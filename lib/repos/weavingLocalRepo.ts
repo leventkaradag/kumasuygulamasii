@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import type { Pattern } from "@/lib/domain/pattern";
 import type {
@@ -66,7 +66,9 @@ type CreateDispatchDocumentInput = {
   docNo?: string;
   transferId?: string | null;
   sourceJobId?: string | null;
+  sourceJobNoSnapshot?: string | null;
   sourceDispatchDocId?: string | null;
+  sourceDispatchNoSnapshot?: string | null;
   planId: string;
   patternId: string;
   patternNoSnapshot: string;
@@ -80,7 +82,9 @@ type CreateDispatchDocumentInput = {
 
 type CreateDyehouseToWarehouseDispatchInput = {
   sourceJobId: string;
+  sourceJobNoSnapshot?: string | null;
   sourceDispatchDocId: string;
+  sourceDispatchNoSnapshot?: string | null;
   createdAt?: string;
   docNo?: string;
   planId: string;
@@ -91,6 +95,7 @@ type CreateDyehouseToWarehouseDispatchInput = {
     colorNameSnapshot: string;
     variantCodeSnapshot?: string;
     meters: number;
+    kg?: number | null;
   }>;
   note?: string;
 };
@@ -1202,26 +1207,38 @@ export const weavingLocalRepo = {
   createDyehouseToWarehouseDispatchDocument(
     input: CreateDyehouseToWarehouseDispatchInput
   ): WeavingDispatchDocument {
-    const lines = (input.lines ?? []).map((line) =>
-      normalizeDispatchDocumentVariantLineInput({
+    const documents = readDispatchDocuments();
+    const isDuplicate = documents.some(
+      (doc) => doc.type === "BOYAHANE_TO_DEPO" && doc.sourceJobId === input.sourceJobId
+    );
+    if (isDuplicate) {
+      throw new Error("Bu is emri icin depo sevk belgesi zaten olusturulmus.");
+    }
+
+    const lines = (input.lines ?? []).map((line) => {
+      const normalized = normalizeDispatchDocumentVariantLineInput({
         colorNameSnapshot: line.colorNameSnapshot,
         variantCodeSnapshot: line.variantCodeSnapshot,
         meters: line.meters,
-      })
-    );
+      });
+      return { ...normalized, kg: typeof line.kg === "number" ? line.kg : undefined };
+    });
+
     if (lines.length === 0) {
       throw new Error("En az bir satir olmadan cikis belgesi olusturulamaz.");
     }
     const metersTotal = lines.reduce((sum, line) => sum + line.meters, 0);
 
-    return this.createDispatchDocument({
+    const next = createDispatchDocumentRecord({
       type: "BOYAHANE_TO_DEPO",
       createdAt: input.createdAt,
       destination: "DEPO",
       docNo: input.docNo,
       transferId: null,
       sourceJobId: input.sourceJobId,
+      sourceJobNoSnapshot: input.sourceJobNoSnapshot,
       sourceDispatchDocId: input.sourceDispatchDocId,
+      sourceDispatchNoSnapshot: input.sourceDispatchNoSnapshot,
       planId: input.planId,
       patternId: input.patternId,
       patternNoSnapshot: input.patternNoSnapshot,
@@ -1231,7 +1248,11 @@ export const weavingLocalRepo = {
       variantLines: lines,
       metersTotal,
       note: input.note,
-    });
+    }, documents);
+
+    documents.push(next);
+    writeDispatchDocuments(documents);
+    return next;
   },
 
   deleteProgress(id: string): boolean {

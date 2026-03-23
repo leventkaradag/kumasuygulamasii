@@ -71,6 +71,7 @@ export type WeavingDispatchDocumentVariantLine = {
   colorNameSnapshot: string;
   variantCodeSnapshot?: string;
   meters: number;
+  kg?: number | null;
 };
 
 export type WeavingDispatchDocument = {
@@ -81,7 +82,9 @@ export type WeavingDispatchDocument = {
   docNo: string;
   transferId?: string | null;
   sourceJobId?: string | null;
+  sourceJobNoSnapshot?: string | null;
   sourceDispatchDocId?: string | null;
+  sourceDispatchNoSnapshot?: string | null;
   planId: string;
   patternId: string;
   patternNoSnapshot: string;
