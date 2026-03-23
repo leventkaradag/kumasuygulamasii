@@ -144,13 +144,14 @@ const normalizeStoredLine = (input: unknown): DyehouseLine | null => {
   if (!input || typeof input !== "object") return null;
   const raw = input as Partial<DyehouseLine>;
 
-  const colorName = normalizeText(raw.colorName);
+  const colorName = normalizeText(raw.colorName) ?? normalizeText(raw.color ?? undefined);
   if (!colorName) return null;
 
   const metersPlanned =
     typeof raw.metersPlanned === "number" && Number.isFinite(raw.metersPlanned)
       ? raw.metersPlanned
-      : Number(raw.metersPlanned);
+      : Number(raw.metersPlanned || raw.incomingQuantityMeters);
+  
   if (!Number.isFinite(metersPlanned) || metersPlanned <= 0) return null;
 
   return {
@@ -162,6 +163,19 @@ const normalizeStoredLine = (input: unknown): DyehouseLine | null => {
     outputKg: normalizeOptionalNonNegativeNumber(raw.outputKg),
     wasteKg: normalizeOptionalNumber(raw.wasteKg),
     notes: normalizeText(raw.notes),
+
+    sourceDispatchLineId: normalizeText(raw.sourceDispatchLineId ?? undefined) ?? null,
+    patternId: normalizeText(raw.patternId ?? undefined) ?? null,
+    patternCode: normalizeText(raw.patternCode ?? undefined) ?? null,
+    patternName: normalizeText(raw.patternName ?? undefined) ?? null,
+    variantId: normalizeText(raw.variantId ?? undefined) ?? null,
+    variantName: normalizeText(raw.variantName ?? undefined) ?? null,
+    color: normalizeText(raw.color ?? undefined) ?? colorName ?? null,
+    incomingQuantityMeters: normalizeOptionalNonNegativeNumber(raw.incomingQuantityMeters) ?? metersPlanned,
+    incomingQuantityKg: normalizeOptionalNonNegativeNumber(raw.incomingQuantityKg) ?? null,
+    rawKg: normalizeOptionalNonNegativeNumber(raw.rawKg) ?? normalizeOptionalNonNegativeNumber(raw.inputKg) ?? null,
+    cleanKg: normalizeOptionalNonNegativeNumber(raw.cleanKg) ?? normalizeOptionalNonNegativeNumber(raw.outputKg) ?? null,
+    note: normalizeText(raw.note ?? undefined) ?? normalizeText(raw.notes ?? undefined) ?? null,
   };
 };
 
@@ -178,6 +192,19 @@ const normalizeLineInput = (input: DyehouseLine): DyehouseLine => {
     outputKg: normalizeOptionalNonNegativeNumber(input.outputKg),
     wasteKg: normalizeOptionalNumber(input.wasteKg),
     notes: normalizeText(input.notes),
+
+    sourceDispatchLineId: normalizeText(input.sourceDispatchLineId ?? undefined) ?? null,
+    patternId: normalizeText(input.patternId ?? undefined) ?? null,
+    patternCode: normalizeText(input.patternCode ?? undefined) ?? null,
+    patternName: normalizeText(input.patternName ?? undefined) ?? null,
+    variantId: normalizeText(input.variantId ?? undefined) ?? null,
+    variantName: normalizeText(input.variantName ?? undefined) ?? null,
+    color: normalizeText(input.color ?? undefined) ?? colorName ?? null,
+    incomingQuantityMeters: normalizeOptionalNonNegativeNumber(input.incomingQuantityMeters) ?? metersPlanned,
+    incomingQuantityKg: normalizeOptionalNonNegativeNumber(input.incomingQuantityKg) ?? null,
+    rawKg: normalizeOptionalNonNegativeNumber(input.rawKg) ?? normalizeOptionalNonNegativeNumber(input.inputKg) ?? null,
+    cleanKg: normalizeOptionalNonNegativeNumber(input.cleanKg) ?? normalizeOptionalNonNegativeNumber(input.outputKg) ?? null,
+    note: normalizeText(input.note ?? undefined) ?? normalizeText(input.notes ?? undefined) ?? null,
   };
 };
 
@@ -198,7 +225,8 @@ const normalizeStoredProgress = (input: unknown): DyehouseProgressEntry | null =
   const meters =
     typeof raw.meters === "number" && Number.isFinite(raw.meters)
       ? raw.meters
-      : Number(raw.meters);
+      : Number(raw.meters || raw.quantityMeters);
+      
   if (!Number.isFinite(meters) || meters <= 0) return null;
 
   const createdAtRaw = normalizeText(raw.createdAt) ?? new Date().toISOString();
@@ -213,7 +241,14 @@ const normalizeStoredProgress = (input: unknown): DyehouseProgressEntry | null =
     meters,
     metersPerUnit: normalizeOptionalPositiveNumber(raw.metersPerUnit),
     unitCount: normalizeOptionalPositiveInteger(raw.unitCount) ?? 1,
-    note: normalizeText(raw.note),
+    note: normalizeText(raw.note ?? undefined) ?? null,
+
+    updatedAt: normalizeText(raw.updatedAt),
+    lineId: normalizeText(raw.lineId ?? undefined) ?? null,
+    processType: normalizeText(raw.processType ?? undefined) ?? null,
+    color: normalizeText(raw.color ?? undefined) ?? null,
+    quantityKg: normalizeOptionalNonNegativeNumber(raw.quantityKg) ?? null,
+    quantityMeters: normalizeOptionalNonNegativeNumber(raw.quantityMeters) ?? meters ?? null,
   };
 };
 
@@ -265,9 +300,11 @@ const normalizeStoredJob = (input: unknown): DyehouseJob | null => {
       : null;
 
   const lines = normalizeStoredLines(raw.lines);
+  const id = normalizeText(raw.id) ?? createId();
+  const status = hasJobStatus(raw.status) ? raw.status : "RECEIVED";
 
   return {
-    id: normalizeText(raw.id) ?? createId(),
+    id,
     dyehouseId,
     dyehouseNameSnapshot,
     sourceDispatchDocId,
@@ -275,12 +312,25 @@ const normalizeStoredJob = (input: unknown): DyehouseJob | null => {
     patternCodeSnapshot,
     patternNameSnapshot,
     receivedAt,
-    status: hasJobStatus(raw.status) ? raw.status : "RECEIVED",
+    status,
     inputMetersTotal,
     lines,
-    notes: normalizeText(raw.notes),
+    notes: normalizeText(raw.notes) ?? normalizeText(raw.note ?? undefined),
     finishedAt,
     outputDispatchDocId: normalizeText(raw.outputDispatchDocId ?? undefined) ?? null,
+
+    jobNo: normalizeText(raw.jobNo) ?? `BH-${receivedAt.slice(0, 10).replace(/-/g, "")}-${id.slice(0, 4).toUpperCase()}`,
+    sourceDispatchId: normalizeText(raw.sourceDispatchId) ?? sourceDispatchDocId,
+    sourceDispatchNo: normalizeText(raw.sourceDispatchNo ?? undefined) ?? null,
+    sourceUnit: normalizeText(raw.sourceUnit ?? undefined) ?? null,
+    targetUnit: normalizeText(raw.targetUnit ?? undefined) ?? null,
+    supplierName: normalizeText(raw.supplierName ?? undefined) ?? null,
+    dyehouseName: normalizeText(raw.dyehouseName ?? undefined) ?? dyehouseNameSnapshot ?? null,
+    createdAt: normalizeText(raw.createdAt) ?? receivedAt,
+    updatedAt: normalizeText(raw.updatedAt) ?? receivedAt,
+    startedAt: normalizeText(raw.startedAt ?? undefined) ?? (status === "IN_PROCESS" || status === "FINISHED" ? receivedAt : null),
+    note: normalizeText(raw.note ?? undefined) ?? normalizeText(raw.notes) ?? null,
+    progressEntries: [], // Will be populated dynamically by readJobs to ensure they always exist after normalization
   };
 };
 
@@ -296,18 +346,6 @@ const writeDyehouses = (rows: Dyehouse[]) => {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(rows));
 };
 
-const readJobs = (): DyehouseJob[] => {
-  if (!canUseStorage()) return [];
-  return safeParseArray<unknown>(window.localStorage.getItem(JOBS_STORAGE_KEY))
-    .map(normalizeStoredJob)
-    .filter((row): row is DyehouseJob => row !== null);
-};
-
-const writeJobs = (rows: DyehouseJob[]) => {
-  if (!canUseStorage()) return;
-  window.localStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(rows));
-};
-
 const readProgress = (): DyehouseProgressEntry[] => {
   if (!canUseStorage()) return [];
   return safeParseArray<unknown>(window.localStorage.getItem(PROGRESS_STORAGE_KEY))
@@ -318,6 +356,34 @@ const readProgress = (): DyehouseProgressEntry[] => {
 const writeProgress = (rows: DyehouseProgressEntry[]) => {
   if (!canUseStorage()) return;
   window.localStorage.setItem(PROGRESS_STORAGE_KEY, JSON.stringify(rows));
+};
+
+const readJobs = (): DyehouseJob[] => {
+  if (!canUseStorage()) return [];
+  const jobs = safeParseArray<unknown>(window.localStorage.getItem(JOBS_STORAGE_KEY))
+    .map(normalizeStoredJob)
+    .filter((row): row is DyehouseJob => row !== null);
+  
+  const entries = readProgress();
+  const byJob = new Map<string, DyehouseProgressEntry[]>();
+  entries.forEach((e) => {
+    const bucket = byJob.get(e.jobId);
+    if (bucket) bucket.push(e);
+    else byJob.set(e.jobId, [e]);
+  });
+
+  jobs.forEach(job => {
+    job.progressEntries = byJob.get(job.id) ?? [];
+  });
+
+  return jobs;
+};
+
+const writeJobs = (rows: DyehouseJob[]) => {
+  if (!canUseStorage()) return;
+  // Strip progressEntries to keep data separated in localStorage as requested
+  const toSave = rows.map(r => ({ ...r, progressEntries: undefined }));
+  window.localStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(toSave));
 };
 
 const sortByName = (rows: Dyehouse[]) =>
@@ -424,17 +490,45 @@ export const dyehouseLocalRepo = {
       }
     }
 
-    const lines: DyehouseLine[] = (dispatchDoc.variantLines ?? []).map((line) => ({
-      id: createId(),
-      colorName: normalizeText(line.colorNameSnapshot) ?? "-",
-      variantCode: normalizeText(line.variantCodeSnapshot),
-      metersPlanned: normalizePositiveNumber(line.meters, "Sevk satiri metre"),
-    }));
+    const lines: DyehouseLine[] = (dispatchDoc.variantLines ?? []).map((line) => {
+      const color = normalizeText(line.colorNameSnapshot) ?? "-";
+      const metersPlan = normalizeOptionalPositiveNumber(line.meters) ?? 0;
+      return {
+        id: createId(),
+        colorName: color,
+        variantCode: normalizeText(line.variantCodeSnapshot),
+        metersPlanned: metersPlan,
+        inputKg: undefined,
+        outputKg: undefined,
+        wasteKg: undefined,
+        notes: undefined,
+
+        sourceDispatchLineId: null,
+        patternId: normalizeText(dispatchDoc.patternId ?? undefined) ?? null,
+        patternCode: normalizeText(dispatchDoc.patternNoSnapshot ?? undefined) ?? null,
+        patternName: normalizeText(dispatchDoc.patternNameSnapshot ?? undefined) ?? null,
+        variantId: normalizeText(line.variantId ?? undefined) ?? null,
+        variantName: null,
+        color: color,
+        incomingQuantityMeters: metersPlan,
+        incomingQuantityKg: null,
+        rawKg: null,
+        cleanKg: null,
+        note: null,
+      };
+    });
 
     ensureMetersWithinInputTotal(lines, dispatchDoc.metersTotal);
 
+    const now = new Date().toISOString();
+    const datePart = now.slice(0, 10).replace(/-/g, "");
+    const timePart = now.slice(11, 16).replace(":", "");
+    const id = createId();
+    const randomStr = id.slice(0, 4).toUpperCase();
+    const jobNo = `BH-${datePart}-${timePart}-${randomStr}`;
+
     const next: DyehouseJob = {
-      id: createId(),
+      id,
       dyehouseId,
       dyehouseNameSnapshot: dyehouseName,
       sourceDispatchDocId: dispatchDoc.id,
@@ -448,6 +542,19 @@ export const dyehouseLocalRepo = {
       notes: normalizeText(dispatchDoc.note),
       finishedAt: null,
       outputDispatchDocId: null,
+
+      jobNo,
+      sourceDispatchId: dispatchDoc.id,
+      sourceDispatchNo: normalizeText(dispatchDoc.docNo ?? undefined) ?? null,
+      sourceUnit: "DOKUMA", // Since it comes from WeavingDispatchDocument
+      targetUnit: "BOYAHANE",
+      supplierName: null,
+      dyehouseName: dyehouseName,
+      createdAt: now,
+      updatedAt: now,
+      startedAt: null,
+      note: normalizeText(dispatchDoc.note) ?? null,
+      progressEntries: [],
     };
 
     jobs.push(next);
@@ -473,20 +580,91 @@ export const dyehouseLocalRepo = {
       throw new Error("Toplam ilerleme, metre x adet ile uyusmuyor.");
     }
 
+    const now = new Date().toISOString();
     const next: DyehouseProgressEntry = {
       id: createId(),
       jobId: job.id,
-      createdAt: toIsoDate(input.createdAt ?? new Date().toISOString(), "createdAt"),
+      createdAt: toIsoDate(input.createdAt ?? now, "createdAt"),
       meters: normalizedMeters,
       metersPerUnit,
       unitCount,
-      note: normalizeText(input.note),
+      
+      updatedAt: now,
+      lineId: null,
+      processType: null,
+      color: null,
+      quantityKg: null,
+      quantityMeters: normalizedMeters,
+      note: normalizeText(input.note) ?? null,
     };
 
     const entries = readProgress();
     entries.push(next);
     writeProgress(entries);
     return next;
+  },
+
+  addProgressEntry(jobId: string, entry: Partial<DyehouseProgressEntry>): DyehouseProgressEntry {
+    const normalizedJobId = normalizeRequiredText(jobId, "Is emri");
+    const job = readJobs().find((row) => row.id === normalizedJobId);
+    if (!job) throw new Error("Is emri bulunamadi.");
+
+    const normalizedMeters = normalizePositiveNumber(entry.meters ?? entry.quantityMeters ?? 0, "Metre");
+    const now = new Date().toISOString();
+
+    const next: DyehouseProgressEntry = {
+      id: createId(),
+      jobId: job.id,
+      createdAt: toIsoDate(entry.createdAt ?? now, "createdAt"),
+      meters: normalizedMeters,
+      metersPerUnit: normalizeOptionalPositiveNumber(entry.metersPerUnit),
+      unitCount: normalizeOptionalPositiveInteger(entry.unitCount),
+      
+      updatedAt: now,
+      lineId: normalizeText(entry.lineId ?? undefined) ?? null,
+      processType: normalizeText(entry.processType ?? undefined) ?? null,
+      color: normalizeText(entry.color ?? undefined) ?? null,
+      quantityKg: normalizeOptionalNonNegativeNumber(entry.quantityKg) ?? null,
+      quantityMeters: normalizedMeters,
+      note: normalizeText(entry.note ?? undefined) ?? null,
+    };
+
+    const entries = readProgress();
+    entries.push(next);
+    writeProgress(entries);
+    return next;
+  },
+
+  updateProgressEntry(jobId: string, entryId: string, patch: Partial<DyehouseProgressEntry>): DyehouseProgressEntry | undefined {
+    const entries = readProgress();
+    const idx = entries.findIndex(e => e.id === entryId && e.jobId === jobId);
+    if (idx < 0) return undefined;
+    
+    const current = entries[idx];
+    const normalizedMeters = patch.meters !== undefined ? normalizePositiveNumber(patch.meters, "Metre") : current.meters;
+
+    const next: DyehouseProgressEntry = {
+      ...current,
+      ...patch,
+      id: current.id,
+      jobId: current.jobId,
+      createdAt: current.createdAt,
+      meters: normalizedMeters,
+      quantityMeters: normalizedMeters,
+      updatedAt: new Date().toISOString(),
+    };
+
+    entries[idx] = next;
+    writeProgress(entries);
+    return next;
+  },
+
+  removeProgressEntry(jobId: string, entryId: string): boolean {
+    const entries = readProgress();
+    const next = entries.filter(e => !(e.id === entryId && e.jobId === jobId));
+    if (next.length === entries.length) return false;
+    writeProgress(next);
+    return true;
   },
 
   updateJob(id: string, patch: Partial<Omit<DyehouseJob, "id">>): DyehouseJob | undefined {
@@ -519,6 +697,20 @@ export const dyehouseLocalRepo = {
 
     if (status === "FINISHED" && lines.length === 0) {
       throw new Error("Bitirmek icin en az bir satir gereklidir.");
+    }
+
+    let startedAt = current.startedAt;
+    if (status === "IN_PROCESS" && current.status !== "IN_PROCESS" && !startedAt) {
+      startedAt = new Date().toISOString();
+    }
+
+    let finishedAt = current.finishedAt;
+    if (status === "FINISHED" && current.status !== "FINISHED") {
+      finishedAt = new Date().toISOString();
+    } else if (patch.finishedAt !== undefined) {
+      finishedAt = patch.finishedAt
+        ? toIsoDate(patch.finishedAt, "Bitis tarihi")
+        : null;
     }
 
     const next: DyehouseJob = {
@@ -555,18 +747,17 @@ export const dyehouseLocalRepo = {
       inputMetersTotal,
       lines,
       notes: patch.notes !== undefined ? normalizeText(patch.notes) : current.notes,
-      finishedAt:
-        patch.finishedAt !== undefined
-          ? patch.finishedAt
-            ? toIsoDate(patch.finishedAt, "Bitis tarihi")
-            : null
-          : status === "FINISHED"
-            ? current.finishedAt ?? new Date().toISOString()
-            : current.finishedAt ?? null,
+      finishedAt,
       outputDispatchDocId:
         patch.outputDispatchDocId !== undefined
           ? normalizeText(patch.outputDispatchDocId ?? undefined) ?? null
           : current.outputDispatchDocId ?? null,
+
+      updatedAt: new Date().toISOString(),
+      startedAt,
+      note: patch.note !== undefined ? normalizeText(patch.note ?? undefined) ?? null : current.note,
+      // Any other targeted fields updated here gracefully
+      jobNo: patch.jobNo !== undefined ? normalizeRequiredText(patch.jobNo, "jobNo") : current.jobNo,
     };
 
     jobs[index] = next;

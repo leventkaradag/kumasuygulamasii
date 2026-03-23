@@ -14,12 +14,14 @@ import {
 import { useAuthProfile } from "@/components/AuthProfileProvider";
 import Layout from "../components/Layout";
 import { cn } from "@/lib/cn";
-import type {
-  Dyehouse,
-  DyehouseJob,
-  DyehouseJobStatus,
-  DyehouseLine,
-  DyehouseProgressEntry,
+import {
+  calculateJobTotals,
+  calculateLineWasteKg,
+  type Dyehouse,
+  type DyehouseJob,
+  type DyehouseJobStatus,
+  type DyehouseLine,
+  type DyehouseProgressEntry,
 } from "@/lib/domain/dyehouse";
 import type { WeavingDispatchDocument } from "@/lib/domain/weaving";
 import { dyehouseLocalRepo } from "@/lib/repos/dyehouseLocalRepo";
@@ -41,10 +43,10 @@ type LineDraft = {
   id: string;
   colorName: string;
   variantCode: string;
-  metersPlanned: string;
-  inputKg: string;
-  outputKg: string;
-  wasteKg: string;
+  incomingQuantityMeters: string;
+  incomingQuantityKg: string;
+  rawKg: string;
+  cleanKg: string;
   notes: string;
 };
 
@@ -112,42 +114,43 @@ const computeWasteKg = (inputKg: string, outputKg: string) => {
 
 const createLineDraft = (line?: DyehouseLine): LineDraft => ({
   id: line?.id ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-  colorName: line?.colorName ?? "",
-  variantCode: line?.variantCode ?? "",
-  metersPlanned:
-    typeof line?.metersPlanned === "number" && Number.isFinite(line.metersPlanned)
+  colorName: line?.color ?? line?.colorName ?? "",
+  variantCode: line?.variantCode ?? line?.variantName ?? "",
+  incomingQuantityMeters:
+    typeof line?.incomingQuantityMeters === "number" && Number.isFinite(line.incomingQuantityMeters)
+      ? String(line.incomingQuantityMeters)
+      : typeof line?.metersPlanned === "number" && Number.isFinite(line.metersPlanned)
       ? String(line.metersPlanned)
       : "",
-  inputKg:
-    typeof line?.inputKg === "number" && Number.isFinite(line.inputKg)
+  incomingQuantityKg:
+    typeof line?.incomingQuantityKg === "number" && Number.isFinite(line.incomingQuantityKg)
+      ? String(line.incomingQuantityKg)
+      : "",
+  rawKg:
+    typeof line?.rawKg === "number" && Number.isFinite(line.rawKg)
+      ? String(line.rawKg)
+      : typeof line?.inputKg === "number" && Number.isFinite(line.inputKg)
       ? String(line.inputKg)
       : "",
-  outputKg:
-    typeof line?.outputKg === "number" && Number.isFinite(line.outputKg)
+  cleanKg:
+    typeof line?.cleanKg === "number" && Number.isFinite(line.cleanKg)
+      ? String(line.cleanKg)
+      : typeof line?.outputKg === "number" && Number.isFinite(line.outputKg)
       ? String(line.outputKg)
       : "",
-  wasteKg:
-    typeof line?.inputKg === "number" &&
-    Number.isFinite(line.inputKg) &&
-    typeof line?.outputKg === "number" &&
-    Number.isFinite(line.outputKg)
-      ? String(line.inputKg - line.outputKg)
-      : typeof line?.wasteKg === "number" && Number.isFinite(line.wasteKg)
-        ? String(line.wasteKg)
-      : "",
-  notes: line?.notes ?? "",
+  notes: line?.note ?? line?.notes ?? "",
 });
 
 const getJobTargetMeters = (job: DyehouseJob) => {
-  const distributedMeters = sumMeters(job.lines);
-  return distributedMeters > 0 ? distributedMeters : job.inputMetersTotal;
+  const totals = calculateJobTotals(job);
+  return totals.totalIncomingMeters > 0 ? totals.totalIncomingMeters : job.inputMetersTotal;
 };
 
 const buildJobProgressTotals = (
   job: DyehouseJob,
   progressEntries: DyehouseProgressEntry[]
 ): JobProgressTotals => {
-  const processedMeters = progressEntries.reduce((sum, entry) => sum + entry.meters, 0);
+  const processedMeters = progressEntries.reduce((sum, entry) => sum + (entry.quantityMeters ?? entry.meters), 0);
   const targetMeters = getJobTargetMeters(job);
   return {
     targetMeters,
@@ -161,20 +164,15 @@ const formatRemainingMeters = (meters: number) =>
   meters >= 0 ? `${fmt(meters)} m` : `Asim +${fmt(Math.abs(meters))} m`;
 
 const getProgressAmountText = (
-  entry: Pick<DyehouseProgressEntry, "meters" | "metersPerUnit" | "unitCount">
+  entry: Pick<DyehouseProgressEntry, "meters" | "quantityMeters" | "quantityKg" | "color" | "processType">
 ) => {
-  if (
-    typeof entry.metersPerUnit === "number" &&
-    Number.isFinite(entry.metersPerUnit) &&
-    typeof entry.unitCount === "number" &&
-    Number.isFinite(entry.unitCount)
-  ) {
-    if (entry.unitCount > 1) {
-      return `${fmt(entry.metersPerUnit)} m x ${entry.unitCount} = ${fmt(entry.meters)} m`;
-    }
-  }
-
-  return `${fmt(entry.meters)} m`;
+  const m = entry.quantityMeters ?? entry.meters;
+  const parts = [];
+  if (entry.processType) parts.push(entry.processType);
+  if (entry.color) parts.push(entry.color);
+  if (entry.quantityKg) parts.push(`${fmt(entry.quantityKg)} kg`);
+  parts.push(`${fmt(m)} m`);
+  return parts.join(" - ");
 };
 
 function StatusBadge({ status }: { status: DyehouseJobStatus }) {
@@ -698,8 +696,10 @@ function JobModal({
   const [lineDrafts, setLineDrafts] = useState<LineDraft[]>([]);
   const [jobNotes, setJobNotes] = useState("");
   const [progressDateTime, setProgressDateTime] = useState(nowDateTimeLocal());
+  const [progressProcessType, setProgressProcessType] = useState("");
+  const [progressColor, setProgressColor] = useState("");
+  const [progressKgInput, setProgressKgInput] = useState("");
   const [progressMetersInput, setProgressMetersInput] = useState("");
-  const [progressUnitCountInput, setProgressUnitCountInput] = useState("1");
   const [progressNote, setProgressNote] = useState("");
   const [progressError, setProgressError] = useState("");
   const [isFinishing, setIsFinishing] = useState(false);
@@ -724,8 +724,10 @@ function JobModal({
 
   useEffect(() => {
     setProgressDateTime(nowDateTimeLocal());
+    setProgressProcessType("");
+    setProgressColor("");
+    setProgressKgInput("");
     setProgressMetersInput("");
-    setProgressUnitCountInput("1");
     setProgressNote("");
     setProgressError("");
   }, [job.id]);
@@ -772,17 +774,25 @@ function JobModal({
     const lines = lineDrafts.map((row) => {
       const colorName = row.colorName.trim();
       if (!colorName) throw new Error("Renk zorunlu.");
+      
+      const baseLine = job.lines.find(l => l.id === row.id) || {} as Partial<DyehouseLine>;
 
       return {
+        ...baseLine,
         id: row.id,
         colorName,
+        color: colorName,
         variantCode: row.variantCode.trim() || undefined,
-        metersPlanned: parsePositive(row.metersPlanned, `${colorName} metre`),
-        inputKg: parseOptionalNonNegative(row.inputKg, `${colorName} giris kg`),
-        outputKg: parseOptionalNonNegative(row.outputKg, `${colorName} cikis kg`),
-        wasteKg: computeWasteKg(row.inputKg, row.outputKg),
+        variantName: row.variantCode.trim() || undefined,
+        metersPlanned: parsePositive(row.incomingQuantityMeters, `${colorName} metre`),
+        incomingQuantityMeters: parsePositive(row.incomingQuantityMeters, `${colorName} metre`),
+        inputKg: parseOptionalNonNegative(row.rawKg, `${colorName} ham kg`),
+        rawKg: parseOptionalNonNegative(row.rawKg, `${colorName} ham kg`),
+        outputKg: parseOptionalNonNegative(row.cleanKg, `${colorName} temiz kg`),
+        cleanKg: parseOptionalNonNegative(row.cleanKg, `${colorName} temiz kg`),
         notes: row.notes.trim() || undefined,
-      } satisfies DyehouseLine;
+        note: row.notes.trim() || undefined,
+      } as DyehouseLine;
     });
 
     if (sumMeters(lines) - job.inputMetersTotal > 1e-6) {
@@ -796,30 +806,34 @@ function JobModal({
     const base = buildBreakdownLines();
     return base.map((line, index) => {
       const row = lineDrafts[index];
-      const inputKg = parseNonNegative(row.inputKg, `${line.colorName} giris kg`);
-      const outputKg = parseNonNegative(row.outputKg, `${line.colorName} cikis kg`);
-      const wasteKg = inputKg - outputKg;
+      const rawKg = parseNonNegative(row.rawKg, `${line.colorName} ham kg`);
+      const cleanKg = parseNonNegative(row.cleanKg, `${line.colorName} temiz kg`);
+      const wasteKg = rawKg - cleanKg;
       return {
         ...line,
-        inputKg,
-        outputKg,
+        inputKg: rawKg,
+        rawKg,
+        outputKg: cleanKg,
+        cleanKg,
         wasteKg,
         notes: row.notes.trim() || undefined,
-      };
+        note: row.notes.trim() || undefined,
+      } as DyehouseLine;
     });
   };
 
   const plannedMetersFromDraft = useMemo(() => {
     return lineDrafts.reduce((sum, row) => {
-      const parsed = Number(row.metersPlanned.trim().replace(",", "."));
+      const parsed = Number(row.incomingQuantityMeters.trim().replace(",", "."));
       if (!Number.isFinite(parsed) || parsed <= 0) return sum;
       return sum + parsed;
     }, 0);
   }, [lineDrafts]);
 
   const progressCalculatedTotal = useMemo(() => {
-    return calculateProgressTotalMeters(progressMetersInput, progressUnitCountInput);
-  }, [progressMetersInput, progressUnitCountInput]);
+    const parsed = Number(progressMetersInput.replace(",", "."));
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }, [progressMetersInput]);
 
   const progressTotals = useMemo(() => {
     return buildJobProgressTotals(job, progressEntries);
@@ -848,9 +862,9 @@ function JobModal({
   const finishWarnings = useMemo(
     () =>
       lineDrafts.flatMap((row) => {
-        const wasteKg = computeWasteKg(row.inputKg, row.outputKg);
+        const wasteKg = computeWasteKg(row.rawKg, row.cleanKg);
         if (wasteKg === undefined || wasteKg >= 0) return [];
-        return [`${row.colorName || "Satir"} icin Cikis Kg, Giris Kg'dan buyuk.`];
+        return [`${row.colorName || "Satir"} icin Temiz Kg, Ham Kg'dan buyuk.`];
       }),
     [lineDrafts]
   );
@@ -880,20 +894,23 @@ function JobModal({
     if (!canEditProgress) return;
 
     try {
-      const metersPerUnit = toPositiveNumberInput(progressMetersInput, "Metre");
-      const unitCount = toPositiveIntInput(progressUnitCountInput, "Adet");
-      const totalMeters = metersPerUnit * unitCount;
+      const meters = toPositiveNumberInput(progressMetersInput, "Metre");
       const createdAt = toIsoFromDateTimeLocal(progressDateTime, "Tarih / Saat");
+      const quantityKg = progressKgInput.trim() ? Number(progressKgInput.replace(",", ".")) : undefined;
 
-      dyehouseLocalRepo.addProgress({
-        jobId: job.id,
+      dyehouseLocalRepo.addProgressEntry(job.id, {
         createdAt,
-        meters: totalMeters,
-        metersPerUnit,
-        unitCount,
+        processType: progressProcessType.trim() || undefined,
+        color: progressColor.trim() || undefined,
+        quantityKg: Number.isFinite(quantityKg) ? quantityKg : undefined,
+        quantityMeters: meters,
+        meters, // fallback for legacy
         note: progressNote.trim() || undefined,
       });
 
+      setProgressProcessType("");
+      setProgressColor("");
+      setProgressKgInput("");
       setProgressMetersInput("");
       setProgressNote("");
       setProgressError("");
@@ -909,7 +926,7 @@ function JobModal({
 
   const deleteProgress = (progressId: string) => {
     if (!canEditProgress) return;
-    dyehouseLocalRepo.deleteProgress(progressId);
+    dyehouseLocalRepo.removeProgressEntry(job.id, progressId);
     setProgressError("");
     setSuccess("Ilerleme silindi.");
     setError("");
@@ -1067,7 +1084,7 @@ function JobModal({
             </div>
           </div>
 
-          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_140px_110px_150px]">
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_120px_120px_90px_100px]">
             <label className="space-y-1 text-xs text-neutral-700">
               <span>Tarih / Saat</span>
               <input
@@ -1075,6 +1092,44 @@ function JobModal({
                 value={progressDateTime}
                 disabled={!canEditProgress}
                 onChange={(event) => setProgressDateTime(event.target.value)}
+                className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
+              />
+            </label>
+
+            <label className="space-y-1 text-xs text-neutral-700">
+              <span>Islem Tipi</span>
+              <input
+                type="text"
+                value={progressProcessType}
+                disabled={!canEditProgress}
+                onChange={(event) => setProgressProcessType(event.target.value)}
+                placeholder="Örn: Yıkama"
+                className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
+              />
+            </label>
+
+            <label className="space-y-1 text-xs text-neutral-700">
+              <span>Renk</span>
+              <input
+                type="text"
+                value={progressColor}
+                disabled={!canEditProgress}
+                onChange={(event) => setProgressColor(event.target.value)}
+                placeholder="Örn: Siyah"
+                className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
+              />
+            </label>
+
+            <label className="space-y-1 text-xs text-neutral-700">
+              <span>Kg</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={progressKgInput}
+                disabled={!canEditProgress}
+                onChange={(event) => setProgressKgInput(event.target.value)}
+                placeholder="0"
                 className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
               />
             </label>
@@ -1094,27 +1149,6 @@ function JobModal({
                 className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
               />
             </label>
-
-            <label className="space-y-1 text-xs text-neutral-700">
-              <span>Adet</span>
-              <input
-                type="number"
-                min="1"
-                step="1"
-                value={progressUnitCountInput}
-                disabled={!canEditProgress}
-                onChange={(event) => setProgressUnitCountInput(event.target.value)}
-                placeholder="1"
-                className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
-              />
-            </label>
-
-            <div className="space-y-1 text-xs text-neutral-700">
-              <span className="block">Toplam Ilerleme</span>
-              <div className="rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-sm font-semibold text-neutral-900">
-                {fmt(progressCalculatedTotal)} m
-              </div>
-            </div>
           </div>
 
           <input
@@ -1255,9 +1289,9 @@ function JobModal({
                         type="number"
                         min="0"
                         step="0.01"
-                        value={row.metersPlanned}
+                        value={row.incomingQuantityMeters}
                         disabled={!rowsEditable}
-                        onChange={(event) => updateLine(row.id, "metersPlanned", event.target.value)}
+                        onChange={(event) => updateLine(row.id, "incomingQuantityMeters", event.target.value)}
                         className="w-full rounded border border-black/10 bg-white px-2 py-1 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
                       />
                     </td>
@@ -1352,11 +1386,11 @@ function JobModal({
                     </thead>
                     <tbody>
                       {lineDrafts.map((row) => {
-                        const computedWasteKg = computeWasteKg(row.inputKg, row.outputKg);
+                        const computedWasteKg = computeWasteKg(row.rawKg, row.cleanKg);
                         const wasteDisplay =
                           computedWasteKg !== undefined
                             ? fmt(computedWasteKg)
-                            : row.wasteKg.trim();
+                            : "";
                         const hasWasteWarning =
                           computedWasteKg !== undefined && computedWasteKg < 0;
 
@@ -1364,16 +1398,16 @@ function JobModal({
                           <tr key={`${row.id}-finish`} className="border-t border-black/5">
                             <td className="px-2 py-1.5">{row.colorName || "-"}</td>
                             <td className="px-2 py-1.5">
-                              {row.metersPlanned ? fmt(Number(row.metersPlanned) || 0) : "-"}
+                              {row.incomingQuantityMeters ? fmt(Number(row.incomingQuantityMeters) || 0) : "-"}
                             </td>
                             <td className="px-2 py-1.5">
                               <input
                                 type="number"
                                 min="0"
                                 step="0.01"
-                                value={row.inputKg}
+                                value={row.rawKg}
                                 disabled={!finishEditable}
-                                onChange={(event) => updateLine(row.id, "inputKg", event.target.value)}
+                                onChange={(event) => updateLine(row.id, "rawKg", event.target.value)}
                                 className="w-full rounded border border-black/10 bg-white px-2 py-1 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
                               />
                             </td>
@@ -1382,9 +1416,9 @@ function JobModal({
                                 type="number"
                                 min="0"
                                 step="0.01"
-                                value={row.outputKg}
+                                value={row.cleanKg}
                                 disabled={!finishEditable}
-                                onChange={(event) => updateLine(row.id, "outputKg", event.target.value)}
+                                onChange={(event) => updateLine(row.id, "cleanKg", event.target.value)}
                                 className="w-full rounded border border-black/10 bg-white px-2 py-1 text-xs text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary disabled:cursor-not-allowed disabled:bg-neutral-100"
                               />
                             </td>
