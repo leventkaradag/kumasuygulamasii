@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import {
   useEffect,
@@ -25,8 +25,9 @@ import type {
   WeavingTransferDestination,
 } from "@/lib/domain/weaving";
 import { dyehouseLocalRepo } from "@/lib/repos/dyehouseLocalRepo";
-import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
+import { patternsSupabaseRepo } from "@/lib/repos/patternsSupabaseRepo";
 import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
+import { weavingSupabaseRepo } from "@/lib/repos/weavingSupabaseRepo";
 import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 import {
   WORKFLOW_PROGRESS_EPSILON,
@@ -490,16 +491,12 @@ const createEmptyNewPatternForm = (): NewPatternForm => ({
 
 export default function Dokuma() {
   const { permissions } = useAuthProfile();
-  const [plans, setPlans] = useState<WeavingPlan[]>(() => weavingLocalRepo.listPlans());
-  const [progressEntries, setProgressEntries] = useState<WeavingProgressEntry[]>(() =>
-    weavingLocalRepo.listProgress()
-  );
-  const [transferEntries, setTransferEntries] = useState<WeavingTransfer[]>(() =>
-    weavingLocalRepo.listTransfers()
-  );
-  const [patterns, setPatterns] = useState<Pattern[]>(() =>
-    sortPatterns(patternsLocalRepo.list().filter((pattern) => pattern.archived !== true))
-  );
+  const [plans, setPlans] = useState<WeavingPlan[]>([]);
+  const [progressEntries, setProgressEntries] = useState<WeavingProgressEntry[]>([]);
+  const [transferEntries, setTransferEntries] = useState<WeavingTransfer[]>(() => weavingLocalRepo.listTransfers());
+  const [patterns, setPatterns] = useState<Pattern[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [dyehouses, setDyehouses] = useState<Dyehouse[]>(() => dyehouseLocalRepo.list());
 
   const [planModalOpen, setPlanModalOpen] = useState(false);
@@ -552,15 +549,47 @@ export default function Dokuma() {
 
   useModalFocusTrap({ enabled: planModalOpen, containerRef: planModalRef });
 
-  const refreshData = () => {
-    setPlans(weavingLocalRepo.listPlans());
-    setProgressEntries(weavingLocalRepo.listProgress());
-    setTransferEntries(weavingLocalRepo.listTransfers());
-    setPatterns(
-      sortPatterns(patternsLocalRepo.list().filter((pattern) => pattern.archived !== true))
-    );
-    setDyehouses(dyehouseLocalRepo.list());
+    const refreshData = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      const [fetchedPlans, fetchedProgress, fetchedPatterns, activeTransfers] = await Promise.all([
+        weavingSupabaseRepo.listPlans(),
+        weavingSupabaseRepo.listProgress(),
+        patternsSupabaseRepo.list(),
+        weavingSupabaseRepo.listTransfers()
+      ]);
+
+      // Recalculate variant metrics dynamically (Hybrid: Supabase + Local Transfers)
+      const mappedPlans = fetchedPlans.map(plan => {
+        if (!hasPlanVariants(plan)) return plan;
+        const mappedVariants = plan.variants.map(v => {
+          const woven = fetchedProgress.filter(p => p.planId === plan.id && p.variantId === v.id).reduce((sum, p) => sum + p.meters, 0);
+          const shipped = activeTransfers.filter(t => t.planId === plan.id).reduce((sum, t) => sum + (t.variantLines?.find(vl => vl.variantId === v.id)?.meters || 0), 0);
+          return { ...v, wovenMeters: Math.max(0, woven), shippedMeters: Math.max(0, shipped), status: woven >= v.plannedMeters ? "DONE" : "ACTIVE" };
+        });
+        return {
+          ...plan,
+          variants: mappedVariants as unknown as WeavingPlanVariant[],
+          plannedMeters: mappedVariants.reduce((sum, v) => sum + v.plannedMeters, 0)
+        } as WeavingPlan;
+      });
+
+      setPlans(mappedPlans);
+      setProgressEntries(fetchedProgress);
+      setTransferEntries(activeTransfers);
+      setPatterns(sortPatterns(fetchedPatterns.filter((pattern) => pattern.archived !== true)));
+      setDyehouses(dyehouseLocalRepo.list());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sistem verileri yüklenemedi.");
+    } finally {
+      setIsLoading(false);
+    }
   };
+
+  useEffect(() => {
+    refreshData();
+  }, []);
 
   const planTotalsById = useMemo(() => {
     const progressByPlan = new Map<string, number>();
@@ -760,9 +789,7 @@ export default function Dokuma() {
   const detailPattern = useMemo(() => {
     if (!detailPlan) return null;
     return (
-      patterns.find((pattern) => pattern.id === detailPlan.patternId) ??
-      patternsLocalRepo.list().find((pattern) => pattern.id === detailPlan.patternId) ??
-      null
+      patterns.find((pattern) => pattern.id === detailPlan.patternId) ?? null
     );
   }, [detailPlan, patterns]);
 
@@ -975,7 +1002,7 @@ export default function Dokuma() {
     });
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const dataUrl = reader.result;
       if (typeof dataUrl !== "string") {
         setPatternSelectorError("Gorsel okunamadi.");
@@ -1010,7 +1037,7 @@ export default function Dokuma() {
     });
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const dataUrl = reader.result;
       if (typeof dataUrl !== "string") {
         setPatternSelectorError("Gorsel okunamadi.");
@@ -1029,7 +1056,7 @@ export default function Dokuma() {
     event.currentTarget.value = "";
   };
 
-  const handleCreatePatternFromSelector = () => {
+  const handleCreatePatternFromSelector = async () => {
     if (!canCreatePatterns) return;
     try {
       const normalizedCode = newPatternForm.code.trim();
@@ -1044,7 +1071,7 @@ export default function Dokuma() {
         tarakEniCm = parsedTarakEniCm;
       }
 
-      const created = patternsLocalRepo.upsertPatternFromForm({
+      const created = await patternsSupabaseRepo.upsertPatternFromForm({
         fabricCode: normalizedCode,
         fabricName: newPatternForm.name.trim() || normalizedCode,
         weaveType: newPatternForm.weaveType.trim() || "-",
@@ -1072,7 +1099,7 @@ export default function Dokuma() {
     }
   };
 
-  const handleCreatePlan = () => {
+  const handleCreatePlan = async () => {
     if (!canCreatePlans) return;
     try {
       if (!selectedPattern) throw new Error("Desen secimi zorunlu.");
@@ -1081,7 +1108,7 @@ export default function Dokuma() {
         ? toPositiveNumber(tarakEniInput, "Ham Kumas Eni")
         : null;
 
-      weavingLocalRepo.createPlan({
+      await weavingSupabaseRepo.createPlan({
         patternId: selectedPattern.id,
         patternNoSnapshot: selectedPattern.fabricCode,
         patternNameSnapshot: selectedPattern.fabricName,
@@ -1122,7 +1149,7 @@ export default function Dokuma() {
     setProgressError("");
   };
 
-  const handleAddProgress = () => {
+  const handleAddProgress = async () => {
     if (!canEditWeaving) return;
     if (!progressPlanId) return;
 
@@ -1138,7 +1165,7 @@ export default function Dokuma() {
         throw new Error("Varyant secimi gerekli.");
       }
 
-      weavingLocalRepo.addProgress({
+      await weavingSupabaseRepo.addProgress({
         planId: progressPlanId,
         variantId: hasPlanVariants(selectedPlan) ? progressVariantId : undefined,
         createdAt,
@@ -1158,9 +1185,9 @@ export default function Dokuma() {
     }
   };
 
-  const handleDeleteProgress = (id: string) => {
+  const handleDeleteProgress = async (id: string) => {
     if (!canEditWeaving) return;
-    weavingLocalRepo.deleteProgress(id);
+    await weavingSupabaseRepo.deleteProgress(id);
     setProgressError("");
     refreshData();
     focusProgressMetersInput();
@@ -1285,11 +1312,11 @@ export default function Dokuma() {
         dyehouseId = dyehouse.id;
         dyehouseNameSnapshot = dyehouse.name;
       }
-
-      const persistTransfer = () => {
+      const persistTransfer = async () => {
         try {
-          weavingLocalRepo.addTransfer({
-            planId: transferPlanId,
+          setIsLoading(true);
+          await weavingSupabaseRepo.addTransfer({
+            planId: transferPlanId!,
             meters,
             variantLines,
             createdAt,
@@ -1298,7 +1325,6 @@ export default function Dokuma() {
             dyehouseNameSnapshot,
             note: transferNote.trim() || undefined,
           });
-
           setTransferMetersInput("");
           setTransferVariantMetersById(
             hasPlanVariants(selectedPlan)
@@ -1308,9 +1334,11 @@ export default function Dokuma() {
           setTransferDateTime(nowDateTimeLocal());
           setTransferNote("");
           setTransferError("");
-          refreshData();
+          await refreshData();
         } catch (error) {
           setTransferError(error instanceof Error ? error.message : "Sevk kaydedilemedi.");
+        } finally {
+          setIsLoading(false);
         }
       };
 
@@ -1330,18 +1358,28 @@ export default function Dokuma() {
       setTransferError(error instanceof Error ? error.message : "Sevk kaydedilemedi.");
     }
   };
-
-  const handleDeleteTransfer = (id: string) => {
+  const handleDeleteTransfer = async (id: string) => {
     if (!canEditDispatch) return;
-    weavingLocalRepo.deleteTransfer(id);
-    refreshData();
+    try {
+      setIsLoading(true);
+      await weavingSupabaseRepo.deleteTransfer(id);
+      await refreshData();
+    } catch (err) {
+      alert("Sevk silinemedi: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleToggleManualCompleted = (plan: WeavingPlan) => {
+  const handleToggleManualCompleted = async (plan: WeavingPlan) => {
     if (!canAdvanceWeaving) return;
     const completed = !(plan.status === "COMPLETED" && plan.manualCompletedAt);
-    const persistCompletion = () => {
-      weavingLocalRepo.setManualCompleted(plan.id, completed);
+    const persistCompletion = async () => {
+      if (completed) {
+        await weavingSupabaseRepo.markCompleted(plan.id);
+      } else {
+        await weavingSupabaseRepo.restorePlan(plan.id);
+      }
       refreshData();
     };
 
@@ -1365,10 +1403,10 @@ export default function Dokuma() {
     persistCompletion();
   };
 
-  const handleCancelPlan = (plan: WeavingPlan) => {
+  const handleCancelPlan = async (plan: WeavingPlan) => {
     if (!canAdvanceWeaving) return;
     if (!window.confirm(`${plan.patternNoSnapshot} planini iptal etmek istiyor musunuz?`)) return;
-    weavingLocalRepo.updatePlanStatus(plan.id, "CANCELLED");
+    await weavingSupabaseRepo.updatePlanStatus(plan.id, "CANCELLED");
     refreshData();
   };
 
@@ -1376,15 +1414,26 @@ export default function Dokuma() {
     setWarningConfirm(null);
   };
 
-  const confirmWarningAction = () => {
+  const confirmWarningAction = async () => {
     const action = warningConfirm?.onConfirm;
     setWarningConfirm(null);
-    action?.();
+    await action?.();
   };
 
   return (
     <Layout title="Dokuma">
       <div className="flex h-full min-h-0 flex-col gap-4">
+        {isLoading && (
+          <div className="flex w-full items-center justify-center p-4 text-sm font-semibold text-neutral-500">
+            Yükleniyor...
+          </div>
+        )}
+        {error && (
+          <div className="flex w-full flex-col items-center justify-center gap-2 rounded-xl bg-rose-50 p-4 text-sm text-rose-500">
+            <span className="font-semibold">Hata Oluştu</span>
+            <span>{error}</span>
+          </div>
+        )}
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <SummaryCard title="Aktif Plan" value={`${activeSummary.activePlanCount}`} />
           <SummaryCard title="Toplam Plan (m)" value={fmt(activeSummary.totalPlanned)} />
@@ -2734,7 +2783,7 @@ function WeavingDetailContent({
     return () => window.clearTimeout(timeout);
   }, [fabricSaveSuccess]);
 
-  const savePatternImage = (target: "DIGITAL" | "FINAL", dataUrl: string) => {
+  const savePatternImage = async (target: "DIGITAL" | "FINAL", dataUrl: string) => {
     if (!canEditPatterns) throw new Error("Bu hesap desen gorseli guncelleyemez.");
     if (!pattern) throw new Error("Desen kaydi bulunamadi.");
 
@@ -2749,7 +2798,7 @@ function WeavingDetailContent({
             finalImageUrl: dataUrl,
           };
 
-    const updated = patternsLocalRepo.update(pattern.id, nextPatch);
+    const updated = await patternsSupabaseRepo.update(pattern.id, nextPatch);
     if (!updated) throw new Error("Gorsel kaydi basarisiz oldu.");
     onPatternUpdated();
   };
@@ -2777,7 +2826,7 @@ function WeavingDetailContent({
       setPhotoSuccess("");
 
       const reader = new FileReader();
-      reader.onload = () => {
+      reader.onload = async () => {
         const result = reader.result;
         if (typeof result !== "string") {
           setPhotoSuccess("");
@@ -2786,7 +2835,7 @@ function WeavingDetailContent({
         }
 
         try {
-          savePatternImage(target, result);
+          await savePatternImage(target, result);
           setPhotoError("");
           setPhotoSuccess(target === "DIGITAL" ? "Dijital foto kaydedildi." : "Final foto kaydedildi.");
         } catch (error) {
@@ -2824,7 +2873,7 @@ function WeavingDetailContent({
     setIsEditingFabric(false);
   };
 
-  const saveFabricDetails = () => {
+  const saveFabricDetails = async () => {
     if (!canEditPatterns) return;
     if (!pattern) return;
 
@@ -2881,7 +2930,7 @@ function WeavingDetailContent({
         opsiyonelNot: fabricDraft.opsiyonelNot.trim() || undefined,
       };
 
-      const updated = patternsLocalRepo.update(pattern.id, nextPatch);
+      const updated = await patternsSupabaseRepo.update(pattern.id, nextPatch);
       if (!updated) throw new Error("Kumas detaylari kaydedilemedi.");
 
       onPatternUpdated();
@@ -2969,7 +3018,7 @@ function WeavingDetailContent({
     setVariantRows((prev) => prev.filter((row) => row.id !== id));
   };
 
-  const saveVariants = () => {
+  const saveVariants = async () => {
     if (!canEditVariants) return;
     try {
       if (variantRows.length === 0) {
@@ -2999,7 +3048,7 @@ function WeavingDetailContent({
         };
       });
 
-      weavingLocalRepo.updatePlanVariants(plan.id, normalizedVariants);
+      await weavingSupabaseRepo.updatePlan(plan.id, { variants: normalizedVariants });
       onPlanUpdated();
       closeVariantEditor();
     } catch (error) {

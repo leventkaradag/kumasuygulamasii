@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useMemo } from "react";
-import type { WeavingDispatchDocumentVariantLine } from "@/lib/domain/weaving";
-import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
+import { useMemo, useEffect, useState } from "react";
+import type { WeavingDispatchDocumentVariantLine, WeavingDispatchDocument } from "@/lib/domain/weaving";
+import { weavingSupabaseRepo } from "@/lib/repos/weavingSupabaseRepo";
 
 const fmt = (n: number) => n.toLocaleString("tr-TR", { maximumFractionDigits: 2 });
 
@@ -24,10 +24,21 @@ export default function DispatchPrintPage() {
   const params = useParams<{ id: string }>();
   const id = Array.isArray(params?.id) ? params.id[0] : params?.id;
 
-  const document = useMemo(
-    () => (id ? weavingLocalRepo.getDispatchDocument(id) ?? null : null),
-    [id]
-  );
+  const [document, setDocument] = useState<WeavingDispatchDocument | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!id) {
+      setIsLoading(false);
+      return;
+    }
+    weavingSupabaseRepo
+      .getDispatchDocument(id)
+      .then(setDocument)
+      .catch((err) => setError(err.message))
+      .finally(() => setIsLoading(false));
+  }, [id]);
 
   const lines = useMemo<WeavingDispatchDocumentVariantLine[]>(() => {
     if (!document) return [];
@@ -49,6 +60,24 @@ export default function DispatchPrintPage() {
       : document?.destination === "BOYAHANE"
         ? "Boyahane Sevk Irsaliyesi"
         : "Depo Sevk Irsaliyesi";
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-neutral-100 p-8 text-sm text-neutral-500">
+        Belge yukleniyor...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-neutral-100 p-8">
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-700">
+          Hata: {error}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-neutral-100 p-4 print:bg-white print:p-0">

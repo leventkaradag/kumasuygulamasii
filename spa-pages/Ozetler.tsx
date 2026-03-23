@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Boxes, ChevronLeft, ChevronRight, Droplets, Search, Waves } from "lucide-react";
 
 import Layout from "@/components/Layout";
@@ -10,9 +10,9 @@ import type { FabricRoll } from "@/lib/domain/depo";
 import type { Pattern } from "@/lib/domain/pattern";
 import type { DepoTransaction, DepoTransactionLine } from "@/lib/domain/depoTransaction";
 import { customersLocalRepo } from "@/lib/repos/customersLocalRepo";
-import { depoLocalRepo } from "@/lib/repos/depoLocalRepo";
-import { depoTransactionsLocalRepo } from "@/lib/repos/depoTransactionsLocalRepo";
-import { patternsLocalRepo } from "@/lib/repos/patternsLocalRepo";
+import { depoSupabaseRepo } from "@/lib/repos/depoSupabaseRepo";
+import { depoTransactionsSupabaseRepo } from "@/lib/repos/depoTransactionsSupabaseRepo";
+import { patternsSupabaseRepo } from "@/lib/repos/patternsSupabaseRepo";
 import type {
   SummaryDateRange,
   SummaryModule,
@@ -146,15 +146,43 @@ export default function OzetlerPage() {
     buildRangeForPreset("LAST_12_MONTHS")
   );
 
-  const [patterns] = useState<Pattern[]>(() => patternsLocalRepo.list());
+  const [patterns, setPatterns] = useState<Pattern[]>([]);
   const [customers] = useState<Customer[]>(() => customersLocalRepo.list());
-  const [rolls] = useState<FabricRoll[]>(() => depoLocalRepo.listRolls());
-  const [transactions] = useState<DepoTransaction[]>(() =>
-    depoTransactionsLocalRepo.listTransactions()
-  );
-  const [transactionLines] = useState<DepoTransactionLine[]>(() =>
-    depoTransactionsLocalRepo.listLines()
-  );
+  const [rolls, setRolls] = useState<FabricRoll[]>([]);
+  const [transactions, setTransactions] = useState<DepoTransaction[]>([]);
+  const [transactionLines, setTransactionLines] = useState<DepoTransactionLine[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    setIsLoading(true);
+    setError(null);
+
+    Promise.all([
+      patternsSupabaseRepo.list(),
+      depoSupabaseRepo.listRolls(),
+      depoTransactionsSupabaseRepo.listTransactions(),
+      depoTransactionsSupabaseRepo.listLines()
+    ])
+      .then(([fetchedPatterns, fetchedRolls, fetchedTransactions, fetchedLines]) => {
+        if (!isMounted) return;
+        setPatterns(fetchedPatterns);
+        setRolls(fetchedRolls);
+        setTransactions(fetchedTransactions);
+        setTransactionLines(fetchedLines);
+        setIsLoading(false);
+      })
+      .catch((err) => {
+        if (!isMounted) return;
+        setError(err instanceof Error ? err.message : "Özet verileri yüklenemedi.");
+        setIsLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const [customerDistributionQuery, setCustomerDistributionQuery] = useState("");
   const [patternQuery, setPatternQuery] = useState("");
@@ -334,7 +362,16 @@ export default function OzetlerPage() {
         </section>
 
         <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[30px] border border-black/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(247,243,237,0.9))] p-4 shadow-[0_20px_48px_rgba(15,23,42,0.08)]">
-          {activeModule === "WAREHOUSE" ? (
+          {isLoading ? (
+            <div className="flex h-full items-center justify-center text-sm font-semibold text-neutral-500">
+              Yükleniyor...
+            </div>
+          ) : error ? (
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-rose-500">
+              <span className="font-semibold">Hata Oluştu</span>
+              <span>{error}</span>
+            </div>
+          ) : activeModule === "WAREHOUSE" ? (
             <>
               <div className="space-y-4 border-b border-black/8 pb-4">
                 <div className="rounded-[24px] border border-black/8 bg-white/75 p-3 shadow-[0_12px_30px_rgba(15,23,42,0.04)]">

@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { DepoTransaction, DepoTransactionLine } from "@/lib/domain/depoTransaction";
-import { depoTransactionsLocalRepo } from "@/lib/repos/depoTransactionsLocalRepo";
+import { depoTransactionsSupabaseRepo } from "@/lib/repos/depoTransactionsSupabaseRepo";
 
 const transactionTitleMap = {
   ENTRY: "Depo Giris Fisi",
@@ -33,19 +33,41 @@ export default function DepoTransactionPrintPage() {
   const params = useParams<{ id: string }>();
   const id = Array.isArray(params?.id) ? params.id[0] : params?.id;
 
-  const bundle = useMemo(
-    () => (id ? depoTransactionsLocalRepo.getTransactionWithLines(id) : undefined),
-    [id]
-  );
+  const [transaction, setTransaction] = useState<DepoTransaction | null>(null);
+  const [lines, setLines] = useState<DepoTransactionLine[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const transaction = useMemo<DepoTransaction | null>(
-    () => bundle?.transaction ?? null,
-    [bundle]
-  );
-  const lines = useMemo<DepoTransactionLine[]>(
-    () => bundle?.lines ?? [],
-    [bundle]
-  );
+  useEffect(() => {
+    if (!id) {
+      setIsLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+    setIsLoading(true);
+    setError(null);
+
+    Promise.all([
+      depoTransactionsSupabaseRepo.getTransaction(id),
+      depoTransactionsSupabaseRepo.listLines(id),
+    ])
+      .then(([fetchedTx, fetchedLines]) => {
+        if (!isMounted) return;
+        setTransaction(fetchedTx ?? null);
+        setLines(fetchedLines);
+        setIsLoading(false);
+      })
+      .catch((err) => {
+        if (!isMounted) return;
+        setError(err instanceof Error ? err.message : "Islem kaydi cekilemedi.");
+        setIsLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [id]);
 
   const groupedByPattern = useMemo(() => {
     const groups = new Map<
@@ -128,7 +150,15 @@ export default function DepoTransactionPrintPage() {
       </div>
 
       <article className="print-sheet mx-auto w-full max-w-4xl rounded-xl border border-black/10 bg-white p-6 shadow-sm print:max-w-none print:rounded-none print:border-0 print:p-0 print:shadow-none">
-        {!transaction ? (
+        {isLoading ? (
+          <div className="rounded-lg border border-dashed border-black/20 p-8 text-center text-sm text-neutral-500">
+            Yukleniyor...
+          </div>
+        ) : error ? (
+          <div className="rounded-lg border border-dashed border-black/20 p-8 text-center text-sm text-red-500">
+            {error}
+          </div>
+        ) : !transaction ? (
           <div className="rounded-lg border border-dashed border-black/20 p-8 text-center text-sm text-neutral-500">
             Islem kaydi bulunamadi.
           </div>

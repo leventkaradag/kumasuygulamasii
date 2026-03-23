@@ -25,7 +25,7 @@ import { downloadDepoDailyEntryReportXlsx } from "@/lib/export/depoDailyEntryExc
 import { buildPatternNoteHistory, type PatternNoteEntry } from "@/lib/patternNoteHistory";
 import { customersLocalRepo, normalizeCustomerName } from "@/lib/repos/customersLocalRepo";
 import { depoSupabaseRepo } from "@/lib/repos/depoSupabaseRepo";
-import { depoTransactionsLocalRepo } from "@/lib/repos/depoTransactionsLocalRepo";
+import { depoTransactionsSupabaseRepo } from "@/lib/repos/depoTransactionsSupabaseRepo";
 import { patternsSupabaseRepo } from "@/lib/repos/patternsSupabaseRepo";
 import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
 import { buildDepoDailyEntryReport } from "@/lib/summary/depoDailyEntryReport";
@@ -519,6 +519,8 @@ export default function DepoPage() {
 
   const [isLoadingRolls, setIsLoadingRolls] = useState(true);
   const [rollsError, setRollsError] = useState<string | null>(null);
+  const [isLoadingTx, setIsLoadingTx] = useState(true);
+  const [txError, setTxError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [addVariantId, setAddVariantId] = useState("__other");
   const [addColorName, setAddColorName] = useState("");
@@ -579,24 +581,37 @@ export default function DepoPage() {
     permissions.reservation.edit ||
     permissions.reservation.delete;
 
-  // Sync: transactions, customers, weaving (still localStorage)
-  const refreshSyncData = () => {
+  // Async: transactions + customers + weaving — Supabase transactions, rest local
+  const refreshSyncData = async () => {
+    setIsLoadingTx(true);
+    setTxError(null);
+    try {
+      const [fetchedTx, fetchedLines] = await Promise.all([
+        depoTransactionsSupabaseRepo.listTransactions(),
+        depoTransactionsSupabaseRepo.listLines(),
+      ]);
+      setTransactions(fetchedTx);
+      setTransactionLines(fetchedLines);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Islem gecmisi yuklenemedi.";
+      setTxError(msg);
+    } finally {
+      setIsLoadingTx(false);
+    }
     setCustomers(customersLocalRepo.list());
-    setTransactions(depoTransactionsLocalRepo.listTransactions());
-    setTransactionLines(depoTransactionsLocalRepo.listLines());
     setWeavingPlans(weavingLocalRepo.listPlans());
     setWeavingProgressEntries(weavingLocalRepo.listProgress());
   };
 
-  // Async: patterns + rolls from Supabase
+  // Async: patterns + rolls + transactions from Supabase
   const refreshData = (preferredPatternId?: string | null) => {
-    refreshSyncData();
     setIsLoadingRolls(true);
     setRollsError(null);
 
     Promise.all([
       patternsSupabaseRepo.list(),
       depoSupabaseRepo.listRolls(),
+      refreshSyncData(),
     ]).then(([fetchedPatterns, fetchedRolls]) => {
       const nextPatterns = sortPatterns(fetchedPatterns.filter(isPatternVisible));
       setPatterns(nextPatterns);
@@ -1059,16 +1074,16 @@ export default function DepoPage() {
     }
 
     const combinedSummaryLines: TransactionLineInput[] = [];
-    groupedAddedRolls.forEach((group) => {
+    for (const group of groupedAddedRolls.values()) {
       const summaryLines = buildTransactionLineInputsFromRolls(group.rolls, patternsById);
-      depoTransactionsLocalRepo.createTransaction({
+      await depoTransactionsSupabaseRepo.createTransaction({
         type: "ENTRY",
         createdAt: group.createdAt,
         note: group.note,
         lines: summaryLines,
       });
       combinedSummaryLines.push(...summaryLines);
-    });
+    }
 
     const summaryCreatedAt =
       entries[0]?.createdAt ??
@@ -1276,7 +1291,7 @@ export default function DepoPage() {
       ));
       const lineInputs = buildTransactionLineInputsFromRolls(addedRolls, patternsById);
 
-      depoTransactionsLocalRepo.createTransaction({
+      await depoTransactionsSupabaseRepo.createTransaction({
         type: "RETURN",
         createdAt: inAt,
         customerId: customer.id,
@@ -1483,7 +1498,7 @@ export default function DepoPage() {
         );
       }
 
-      depoTransactionsLocalRepo.createTransaction({
+      await depoTransactionsSupabaseRepo.createTransaction({
         type: bulkActionType,
         createdAt,
         customerId: customer.id,
@@ -1633,7 +1648,7 @@ export default function DepoPage() {
 
       if (reversalLines.length === 0) throw new Error("Geri alinabilecek satir bulunamadi.");
 
-      const reversalTransaction = depoTransactionsLocalRepo.createTransaction({
+      const reversalTransaction = await depoTransactionsSupabaseRepo.createTransaction({
         type: "REVERSAL",
         createdAt,
         customerId: target.customerId,
@@ -1643,7 +1658,7 @@ export default function DepoPage() {
         lines: reversalLines,
       });
 
-      depoTransactionsLocalRepo.markTransactionReversed(target.id, reversalTransaction.id, createdAt);
+      await depoTransactionsSupabaseRepo.markTransactionReversed(target.id, reversalTransaction.id, createdAt);
       setHistoryFeedback(failedCount > 0 ? `${failedCount} top geri alinamadi.` : "Islem geri alindi.");
       refreshData(selectedPattern?.id ?? null);
     } catch (error) {
@@ -1690,7 +1705,7 @@ export default function DepoPage() {
       if (!updated) throw new Error("Top duzeltilemedi.");
 
       const pattern = patterns.find((item) => item.id === updated.patternId);
-      depoTransactionsLocalRepo.createTransaction({
+      await depoTransactionsSupabaseRepo.createTransaction({
         type: "ADJUSTMENT",
         createdAt: new Date().toISOString(),
         note: `Top duzeltme: ${fmt(editingRoll.meters)} -> ${fmt(nextMeters)} m`,
@@ -1747,7 +1762,7 @@ export default function DepoPage() {
 
       const pattern = patterns.find((item) => item.id === voidingRoll.patternId);
       const color = pattern ? rollColor(voidingRoll, pattern) : voidingRoll.colorName?.trim() || "Renk yok";
-      depoTransactionsLocalRepo.createTransaction({
+      await depoTransactionsSupabaseRepo.createTransaction({
         type: "ADJUSTMENT",
         createdAt,
         note: `VOID: ${reason}`,
@@ -1783,6 +1798,18 @@ export default function DepoPage() {
             <button
               onClick={() => refreshData(selectedPatternId)}
               className="mt-3 rounded bg-white px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-inset ring-red-500/20 hover:bg-neutral-50"
+            >
+              Tekrar Dene
+            </button>
+          </div>
+        )}
+        {txError && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-50 p-4 text-sm text-amber-800">
+            <p className="font-semibold text-amber-900">İşlem Geçmişi Yüklenemedi</p>
+            <p className="mt-1">{txError}</p>
+            <button
+              onClick={() => refreshSyncData()}
+              className="mt-3 rounded bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 shadow-sm ring-1 ring-inset ring-amber-500/20 hover:bg-neutral-50"
             >
               Tekrar Dene
             </button>

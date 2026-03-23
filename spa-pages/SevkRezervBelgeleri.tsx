@@ -8,10 +8,10 @@ import { useAuthProfile } from "@/components/AuthProfileProvider";
 import Layout from "@/components/Layout";
 import { cn } from "@/lib/cn";
 import type { DepoTransaction, DepoTransactionLine, DepoTransactionType } from "@/lib/domain/depoTransaction";
-import { depoLocalRepo } from "@/lib/repos/depoLocalRepo";
-import { depoTransactionsLocalRepo } from "@/lib/repos/depoTransactionsLocalRepo";
+import { depoSupabaseRepo } from "@/lib/repos/depoSupabaseRepo";
+import { depoTransactionsSupabaseRepo } from "@/lib/repos/depoTransactionsSupabaseRepo";
 import type { WeavingDispatchDocument } from "@/lib/domain/weaving";
-import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
+import { weavingSupabaseRepo } from "@/lib/repos/weavingSupabaseRepo";
 import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 
 type TypeFilter =
@@ -121,16 +121,31 @@ export default function SevkRezervBelgeleriPage() {
   const [detailTransactionId, setDetailTransactionId] = useState<string | null>(null);
   const [detailDispatchDocumentId, setDetailDispatchDocumentId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const canReverseTransactions =
     permissions.dispatch.edit ||
     permissions.dispatch.delete ||
     permissions.reservation.edit ||
     permissions.reservation.delete;
 
-  const refreshData = () => {
-    setTransactions(depoTransactionsLocalRepo.listTransactions());
-    setLines(depoTransactionsLocalRepo.listLines());
-    setDispatchDocuments(weavingLocalRepo.listDispatchDocuments());
+  const refreshData = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const [fetchedTx, fetchedLines, fetchedDocs] = await Promise.all([
+        depoTransactionsSupabaseRepo.listTransactions(),
+        depoTransactionsSupabaseRepo.listLines(),
+        weavingSupabaseRepo.listDispatchDocuments(),
+      ]);
+      setTransactions(fetchedTx);
+      setLines(fetchedLines);
+      setDispatchDocuments(fetchedDocs);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Veriler yüklenemedi.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -263,7 +278,7 @@ export default function SevkRezervBelgeleriPage() {
     [dispatchDocuments, detailDispatchDocumentId]
   );
 
-  const handleReverseTransaction = () => {
+  const handleReverseTransaction = async () => {
     if (!canReverseTransactions) return;
     if (!detailRow) return;
 
@@ -278,17 +293,20 @@ export default function SevkRezervBelgeleriPage() {
       const reversalLines: Array<Omit<DepoTransactionLine, "id" | "transactionId">> = [];
       let failedCount = 0;
 
-      detailRow.lines.forEach((line) => {
+      for (const line of detailRow.lines) {
         const candidateRollIds = [...(line.rollIds ?? [])];
         const successRollIds: string[] = [];
 
-        candidateRollIds.forEach((rollId) => {
-          const updated =
+        const rollResults = await Promise.all(
+          candidateRollIds.map((rollId) =>
             target.type === "SHIPMENT"
-              ? depoLocalRepo.returnRoll(rollId, createdAt)
-              : depoLocalRepo.unreserveRoll(rollId);
+              ? depoSupabaseRepo.returnRoll(rollId, createdAt)
+              : depoSupabaseRepo.unreserveRoll(rollId)
+          )
+        );
 
-          if (updated) successRollIds.push(rollId);
+        rollResults.forEach((updated, idx) => {
+          if (updated) successRollIds.push(candidateRollIds[idx]);
           else failedCount += 1;
         });
 
@@ -304,13 +322,13 @@ export default function SevkRezervBelgeleriPage() {
             rollIds: successRollIds,
           });
         }
-      });
+      }
 
       if (reversalLines.length === 0) {
         throw new Error("Geri alinabilecek satir bulunamadi.");
       }
 
-      const reversalTransaction = depoTransactionsLocalRepo.createTransaction({
+      const reversalTransaction = await depoTransactionsSupabaseRepo.createTransaction({
         type: "REVERSAL",
         createdAt,
         customerId: target.customerId,
@@ -320,7 +338,7 @@ export default function SevkRezervBelgeleriPage() {
         lines: reversalLines,
       });
 
-      depoTransactionsLocalRepo.markTransactionReversed(target.id, reversalTransaction.id, createdAt);
+      await depoTransactionsSupabaseRepo.markTransactionReversed(target.id, reversalTransaction.id, createdAt);
       setFeedback(failedCount > 0 ? `${failedCount} top geri alinamadi.` : "Islem geri alindi.");
       refreshData();
     } catch (error) {
@@ -370,13 +388,26 @@ export default function SevkRezervBelgeleriPage() {
           </div>
         </div>
 
+        {error && (
+          <div className="rounded-xl border border-red-500/30 bg-red-50 p-4 text-sm text-red-800">
+            <p className="font-semibold text-red-900">Veriler Yüklenirken Hata Oluştu</p>
+            <p className="mt-1">{error}</p>
+            <button
+              onClick={() => refreshData()}
+              className="mt-3 rounded bg-white px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-inset ring-red-500/20 hover:bg-neutral-50"
+            >
+              Tekrar Dene
+            </button>
+          </div>
+        )}
+
         {feedback ? (
           <p className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-medium text-neutral-700">
             {feedback}
           </p>
         ) : null}
 
-        <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-black/10 bg-white">
+        <div className={cn("min-h-0 flex-1 overflow-auto rounded-xl border border-black/10 bg-white", isLoading ? "opacity-50 pointer-events-none" : "")}>
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 bg-neutral-50 text-neutral-600">
               <tr>
