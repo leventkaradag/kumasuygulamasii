@@ -20,7 +20,7 @@ import type { FabricRoll, FabricRollStatus } from "@/lib/domain/depo";
 import type { Customer } from "@/lib/domain/customer";
 import type { DepoTransaction, DepoTransactionLine, DepoTransactionType } from "@/lib/domain/depoTransaction";
 import type { Pattern, Variant } from "@/lib/domain/pattern";
-import type { WeavingPlan, WeavingProgressEntry } from "@/lib/domain/weaving";
+import type { WeavingPlan, WeavingProgressEntry, WeavingDispatchDocument } from "@/lib/domain/weaving";
 import { downloadDepoDailyEntryReportXlsx } from "@/lib/export/depoDailyEntryExcel";
 import { buildPatternNoteHistory, type PatternNoteEntry } from "@/lib/patternNoteHistory";
 import { customersLocalRepo, normalizeCustomerName } from "@/lib/repos/customersLocalRepo";
@@ -510,6 +510,8 @@ export default function DepoPage() {
   const [transactionLines, setTransactionLines] = useState<DepoTransactionLine[]>([]);
   const [weavingPlans, setWeavingPlans] = useState<WeavingPlan[]>([]);
   const [weavingProgressEntries, setWeavingProgressEntries] = useState<WeavingProgressEntry[]>([]);
+  const [dispatchDocuments, setDispatchDocuments] = useState<WeavingDispatchDocument[]>([]);
+  const [processingDocId, setProcessingDocId] = useState<string | null>(null);
   const [selectedPatternId, setSelectedPatternId] = useState<string | null>(null);
   const [searchPattern, setSearchPattern] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -601,6 +603,7 @@ export default function DepoPage() {
     setCustomers(customersLocalRepo.list());
     setWeavingPlans(weavingLocalRepo.listPlans());
     setWeavingProgressEntries(weavingLocalRepo.listProgress());
+    setDispatchDocuments(weavingLocalRepo.listDispatchDocuments());
   };
 
   // Async: patterns + rolls + transactions from Supabase
@@ -633,6 +636,69 @@ export default function DepoPage() {
     refreshData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const handleSync = () => refreshSyncData();
+    window.addEventListener("dispatchDocumentsChanged", handleSync);
+    return () => window.removeEventListener("dispatchDocumentsChanged", handleSync);
+  }, []);
+
+  const incomingBoyahaneDocs = useMemo(() => {
+    return dispatchDocuments.filter((doc) => {
+      if (doc.destination !== "DEPO" || doc.type !== "BOYAHANE_TO_DEPO") return false;
+      const processed = transactions.some((tx) => tx.note?.includes(`[BOYAHANE_DOC:${doc.id}]`));
+      return !processed;
+    });
+  }, [dispatchDocuments, transactions]);
+
+  const handleProcessIncomingDoc = async (doc: WeavingDispatchDocument) => {
+    if (!canManageWarehouse) return;
+    setProcessingDocId(doc.id);
+    try {
+      const createdAt = new Date().toISOString();
+      const rollsToCreate = (doc.variantLines ?? []).map((line) => {
+        return {
+          patternId: doc.patternId,
+          variantId: line.variantId,
+          colorName: line.colorNameSnapshot,
+          meters: line.meters,
+          inAt: createdAt,
+          note: `Boyahane Cikis Fisi: ${doc.docNo}`,
+        };
+      });
+
+      if (rollsToCreate.length === 0) throw new Error("Belgede satir bulunamadi.");
+
+      const addedRolls = await Promise.all(
+        rollsToCreate.map((roll) => depoSupabaseRepo.addRoll(roll))
+      );
+
+      const summaryLines = buildTransactionLineInputsFromRolls(addedRolls, patternsById);
+
+      await depoTransactionsSupabaseRepo.createTransaction({
+        type: "ENTRY",
+        createdAt,
+        note: `Boyahane Cikis Fisi: ${doc.docNo} [BOYAHANE_DOC:${doc.id}]`,
+        lines: summaryLines,
+      });
+
+      setOperationSummary(
+        buildOperationSummary(
+          "Boyahane Giris Ozeti",
+          "Boyahane cikis belgesi depoya stok olarak islendi.",
+          createdAt,
+          summaryLines
+        )
+      );
+
+      window.dispatchEvent(new Event("transactionsChanged"));
+      refreshData();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Belge islenirken hata olustu.");
+    } finally {
+      setProcessingDocId(null);
+    }
+  };
 
   const fromBoundary = useMemo(() => parseBoundary(dateFrom, false), [dateFrom]);
   const toBoundary = useMemo(() => parseBoundary(dateTo, true), [dateTo]);
@@ -1820,6 +1886,33 @@ export default function DepoPage() {
           <SummaryCard title="Rezerve" meters={reservedRolls.reduce((t, r) => t + r.meters, 0)} rolls={reservedRolls.length} tone="amber" />
           <SummaryCard title="Kullanilabilir" meters={availableRolls.reduce((t, r) => t + r.meters, 0)} rolls={availableRolls.length} tone="emerald" />
         </div>
+        {incomingBoyahaneDocs.length > 0 ? (
+          <div className="rounded-xl border border-sky-500/30 bg-sky-50 p-4">
+            <h3 className="mb-3 text-sm font-semibold text-sky-900">Gelen Boyahane Cikis Belgeleri (Islenmeyi Bekleyen)</h3>
+            <div className="space-y-2">
+              {incomingBoyahaneDocs.map((doc) => (
+                <div key={doc.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-500/20 bg-white px-4 py-3 shadow-sm">
+                  <div>
+                    <div className="font-semibold text-neutral-900">{doc.patternNoSnapshot} - {doc.patternNameSnapshot}</div>
+                    <div className="mt-1 text-xs text-neutral-600">
+                      Belge No: {doc.docNo} • Tarih: {formatDateTime(doc.createdAt)} • Toplam Metre: {fmt(doc.metersTotal)}
+                    </div>
+                  </div>
+                  {canManageWarehouse ? (
+                    <button
+                      type="button"
+                      onClick={() => handleProcessIncomingDoc(doc)}
+                      disabled={processingDocId === doc.id}
+                      className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95 disabled:opacity-50"
+                    >
+                      {processingDocId === doc.id ? "Isleniyor..." : "Stoga Al"}
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-black/10 bg-white p-3">
           <div>
             <div className="text-sm font-semibold text-neutral-900">Giris Cizelgesi</div>
