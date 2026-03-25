@@ -25,6 +25,7 @@ import { downloadDepoDailyEntryReportXlsx } from "@/lib/export/depoDailyEntryExc
 import { buildPatternNoteHistory, type PatternNoteEntry } from "@/lib/patternNoteHistory";
 import { customersLocalRepo, normalizeCustomerName } from "@/lib/repos/customersLocalRepo";
 import { depoSupabaseRepo } from "@/lib/repos/depoSupabaseRepo";
+import { settingsSupabaseRepo } from "@/lib/repos/settingsSupabaseRepo";
 import { depoTransactionsSupabaseRepo } from "@/lib/repos/depoTransactionsSupabaseRepo";
 import { patternsSupabaseRepo } from "@/lib/repos/patternsSupabaseRepo";
 import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
@@ -583,8 +584,12 @@ export default function DepoPage() {
     permissions.reservation.edit ||
     permissions.reservation.delete;
 
-  // Async: transactions + customers + weaving — Supabase transactions, rest local
-  const refreshSyncData = async () => {
+  // ── Flags to track whether tab-specific data has been loaded ────────────
+  const txLoadedRef = useRef(false);
+  const weavingLoadedRef = useRef(false);
+
+  // Load transactions + lines (for Hareket tab + incoming doc processing)
+  const refreshTxData = useCallback(async () => {
     setIsLoadingTx(true);
     setTxError(null);
     try {
@@ -594,27 +599,36 @@ export default function DepoPage() {
       ]);
       setTransactions(fetchedTx);
       setTransactionLines(fetchedLines);
+      txLoadedRef.current = true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Islem gecmisi yuklenemedi.";
       setTxError(msg);
     } finally {
       setIsLoadingTx(false);
     }
-    setCustomers(customersLocalRepo.list());
+  }, []);
+
+  // Load weaving plans + progress entries (for Notlar tab)
+  const refreshWeavingData = useCallback(() => {
     setWeavingPlans(weavingLocalRepo.listPlans());
     setWeavingProgressEntries(weavingLocalRepo.listProgress());
-    setDispatchDocuments(weavingLocalRepo.listDispatchDocuments());
-  };
+    weavingLoadedRef.current = true;
+  }, []);
 
-  // Async: patterns + rolls + transactions from Supabase
-  const refreshData = (preferredPatternId?: string | null) => {
+  // Load local sync data: customers, dispatch docs
+  const refreshLocalSyncData = useCallback(() => {
+    setCustomers(customersLocalRepo.list());
+    setDispatchDocuments(weavingLocalRepo.listDispatchDocuments());
+  }, []);
+
+  // Async: patterns + rolls from Supabase (core data for stock tab)
+  const refreshData = useCallback((preferredPatternId?: string | null) => {
     setIsLoadingRolls(true);
     setRollsError(null);
 
     Promise.all([
       patternsSupabaseRepo.list(),
       depoSupabaseRepo.listRolls(),
-      refreshSyncData(),
     ]).then(([fetchedPatterns, fetchedRolls]) => {
       const nextPatterns = sortPatterns(fetchedPatterns.filter(isPatternVisible));
       setPatterns(nextPatterns);
@@ -630,15 +644,55 @@ export default function DepoPage() {
       setRollsError(msg);
       setIsLoadingRolls(false);
     });
-  };
+
+    // Load local sync data (dispatch docs, customers) alongside
+    refreshLocalSyncData();
+  }, [refreshLocalSyncData]);
+
+  // Full refresh including rolls + transactions (for after mutations)
+  const refreshAll = useCallback((preferredPatternId?: string | null) => {
+    refreshData(preferredPatternId);
+    if (txLoadedRef.current) {
+      refreshTxData();
+    }
+    if (weavingLoadedRef.current) {
+      refreshWeavingData();
+    }
+  }, [refreshData, refreshTxData, refreshWeavingData]);
 
   useEffect(() => {
     refreshData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Lazy load tx data when Hareket tab is opened or when incoming docs need processing
   useEffect(() => {
-    const handleSync = () => refreshSyncData();
+    if (activeTab === "tx" && !txLoadedRef.current) {
+      refreshTxData();
+    }
+  }, [activeTab, refreshTxData]);
+
+  // Lazy load weaving data when Notlar tab is opened
+  useEffect(() => {
+    if (activeTab === "notes" && !weavingLoadedRef.current) {
+      refreshWeavingData();
+    }
+  }, [activeTab, refreshWeavingData]);
+
+  // Load tx data for incomingBoyahaneDocs processing (needs transactions to check duplicates)
+  useEffect(() => {
+    if (dispatchDocuments.length > 0 && !txLoadedRef.current) {
+      refreshTxData();
+    }
+  }, [dispatchDocuments, refreshTxData]);
+
+  // Handle cross-tab sync specifically for dispatch docs
+  useEffect(() => {
+    const handleSync = () => {
+      refreshLocalSyncData();
+      if (txLoadedRef.current) refreshTxData();
+      if (weavingLoadedRef.current) refreshWeavingData();
+    };
     window.addEventListener("dispatchDocumentsChanged", handleSync);
     return () => window.removeEventListener("dispatchDocumentsChanged", handleSync);
   }, []);
@@ -650,6 +704,14 @@ export default function DepoPage() {
       return !processed;
     });
   }, [dispatchDocuments, transactions]);
+
+  const [depoFlowEnabled, setDepoFlowEnabled] = useState(true);
+  const [depoFlowLoaded, setDepoFlowLoaded] = useState(false);
+  useEffect(() => {
+    settingsSupabaseRepo.isDyehouseToDepotEnabled()
+      .then((v) => { setDepoFlowEnabled(v); setDepoFlowLoaded(true); })
+      .catch(() => { setDepoFlowEnabled(true); setDepoFlowLoaded(true); });
+  }, []);
 
   const handleProcessIncomingDoc = async (doc: WeavingDispatchDocument) => {
     if (!canManageWarehouse) return;
@@ -692,7 +754,7 @@ export default function DepoPage() {
       );
 
       window.dispatchEvent(new Event("transactionsChanged"));
-      refreshData();
+      refreshAll();
     } catch (error) {
       alert(error instanceof Error ? error.message : "Belge islenirken hata olustu.");
     } finally {
@@ -1100,11 +1162,34 @@ export default function DepoPage() {
     }));
   };
 
+  const [addSaving, setAddSaving] = useState(false);
+
   const persistPendingAddEntries = async (entries: PendingAddEntry[]) => {
     if (entries.length === 0) {
       throw new Error("En az bir top girisi ekleyiniz.");
     }
 
+    // Flatten ALL roll inserts into a single Promise.all for maximum parallelism
+    const allInsertJobs: { entry: PendingAddEntry; promise: Promise<FabricRoll> }[] = [];
+    for (const entry of entries) {
+      for (let i = 0; i < entry.quantity; i++) {
+        allInsertJobs.push({
+          entry,
+          promise: depoSupabaseRepo.addRoll({
+            patternId: entry.patternId,
+            variantId: entry.variantId,
+            colorName: entry.colorName || undefined,
+            meters: entry.meters,
+            inAt: entry.createdAt,
+            note: entry.note,
+          }),
+        });
+      }
+    }
+
+    const allRolls = await Promise.all(allInsertJobs.map((j) => j.promise));
+
+    // Re-group rolls by (createdAt, note) for transaction creation
     const groupedAddedRolls = new Map<
       string,
       {
@@ -1114,8 +1199,8 @@ export default function DepoPage() {
       }
     >();
 
-    // Add rolls to Supabase in parallel per entry
-    for (const entry of entries) {
+    allInsertJobs.forEach((job, index) => {
+      const entry = job.entry;
       const groupKey = JSON.stringify([entry.createdAt, entry.note ?? ""]);
       if (!groupedAddedRolls.has(groupKey)) {
         groupedAddedRolls.set(groupKey, {
@@ -1124,38 +1209,32 @@ export default function DepoPage() {
           rolls: [],
         });
       }
-      const group = groupedAddedRolls.get(groupKey)!;
-      const addPromises = Array.from({ length: entry.quantity }, () =>
-        depoSupabaseRepo.addRoll({
-          patternId: entry.patternId,
-          variantId: entry.variantId,
-          colorName: entry.colorName || undefined,
-          meters: entry.meters,
-          inAt: entry.createdAt,
-          note: entry.note,
-        })
-      );
-      const addedRolls = await Promise.all(addPromises);
-      group.rolls.push(...addedRolls);
-    }
+      groupedAddedRolls.get(groupKey)!.rolls.push(allRolls[index]);
+    });
 
+    // Create transactions in parallel too
     const combinedSummaryLines: TransactionLineInput[] = [];
+    const txPromises: Promise<void>[] = [];
     for (const group of groupedAddedRolls.values()) {
       const summaryLines = buildTransactionLineInputsFromRolls(group.rolls, patternsById);
-      await depoTransactionsSupabaseRepo.createTransaction({
-        type: "ENTRY",
-        createdAt: group.createdAt,
-        note: group.note,
-        lines: summaryLines,
-      });
       combinedSummaryLines.push(...summaryLines);
+      txPromises.push(
+        depoTransactionsSupabaseRepo.createTransaction({
+          type: "ENTRY",
+          createdAt: group.createdAt,
+          note: group.note,
+          lines: summaryLines,
+        }).then(() => {})
+      );
     }
+    await Promise.all(txPromises);
 
     const summaryCreatedAt =
       entries[0]?.createdAt ??
       new Date().toISOString();
 
-    refreshData(selectedPattern?.id ?? null);
+    // Non-blocking refresh — don't make the user wait
+    refreshAll(selectedPattern?.id ?? null);
     return {
       createdAt: summaryCreatedAt,
       summaryLines: combinedSummaryLines,
@@ -1165,6 +1244,8 @@ export default function DepoPage() {
   const handleAddRoll = async () => {
     if (!canManageWarehouse) return;
     if (!selectedPattern) return;
+    if (addSaving) return;
+    setAddSaving(true);
     try {
       const note = addNote.trim() || undefined;
       const addRowsToPersist = addRows.filter((row) => hasPositiveMetersDraftValue(row.meters));
@@ -1186,6 +1267,8 @@ export default function DepoPage() {
       setAddOpen(false);
     } catch (error) {
       setAddError(error instanceof Error ? error.message : "Top girisi kaydedilemedi");
+    } finally {
+      setAddSaving(false);
     }
   };
 
@@ -1376,7 +1459,7 @@ export default function DepoPage() {
         )
       );
       setReturnOpen(false);
-      refreshData(returnSelectedPattern.id);
+      refreshAll(returnSelectedPattern.id);
     } catch (error) {
       setReturnError(error instanceof Error ? error.message : "Iade kaydi kaydedilemedi");
     }
@@ -1585,7 +1668,7 @@ export default function DepoPage() {
       setBasketItems([]);
       setSelectedByRowKey({});
       closeBulkModal();
-      refreshData(selectedPattern?.id ?? null);
+      refreshAll(selectedPattern?.id ?? null);
     } catch (error) {
       setBulkError(error instanceof Error ? error.message : "Toplu islem basarisiz");
     }
@@ -1726,7 +1809,7 @@ export default function DepoPage() {
 
       await depoTransactionsSupabaseRepo.markTransactionReversed(target.id, reversalTransaction.id, createdAt);
       setHistoryFeedback(failedCount > 0 ? `${failedCount} top geri alinamadi.` : "Islem geri alindi.");
-      refreshData(selectedPattern?.id ?? null);
+      refreshAll(selectedPattern?.id ?? null);
     } catch (error) {
       setHistoryFeedback(error instanceof Error ? error.message : "Geri alma basarisiz");
     }
@@ -1790,7 +1873,7 @@ export default function DepoPage() {
       });
 
       closeEditRollModal();
-      refreshData(selectedPattern?.id ?? null);
+      refreshAll(selectedPattern?.id ?? null);
     } catch (error) {
       setEditError(error instanceof Error ? error.message : "Top duzeltme basarisiz");
     }
@@ -1848,7 +1931,7 @@ export default function DepoPage() {
 
       setHistoryFeedback("Top girisi void (kaldirildi) olarak isaretlendi.");
       closeVoidRollModal();
-      refreshData(selectedPattern?.id ?? null);
+      refreshAll(selectedPattern?.id ?? null);
     } catch (error) {
       setVoidError(error instanceof Error ? error.message : "Top kaldirma islemi basarisiz");
     }
@@ -1862,7 +1945,7 @@ export default function DepoPage() {
             <p className="font-semibold text-red-900">Veriler Yüklenirken Hata Oluştu</p>
             <p className="mt-1">{rollsError}</p>
             <button
-              onClick={() => refreshData(selectedPatternId)}
+              onClick={() => refreshAll(selectedPatternId)}
               className="mt-3 rounded bg-white px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-inset ring-red-500/20 hover:bg-neutral-50"
             >
               Tekrar Dene
@@ -1874,7 +1957,7 @@ export default function DepoPage() {
             <p className="font-semibold text-amber-900">İşlem Geçmişi Yüklenemedi</p>
             <p className="mt-1">{txError}</p>
             <button
-              onClick={() => refreshSyncData()}
+              onClick={() => refreshTxData()}
               className="mt-3 rounded bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 shadow-sm ring-1 ring-inset ring-amber-500/20 hover:bg-neutral-50"
             >
               Tekrar Dene
@@ -1886,7 +1969,14 @@ export default function DepoPage() {
           <SummaryCard title="Rezerve" meters={reservedRolls.reduce((t, r) => t + r.meters, 0)} rolls={reservedRolls.length} tone="amber" />
           <SummaryCard title="Kullanilabilir" meters={availableRolls.reduce((t, r) => t + r.meters, 0)} rolls={availableRolls.length} tone="emerald" />
         </div>
-        {incomingBoyahaneDocs.length > 0 ? (
+        {depoFlowLoaded && !depoFlowEnabled && incomingBoyahaneDocs.length > 0 ? (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-50 p-4">
+            <p className="text-sm font-semibold text-amber-800">Boyahane → Depo akisi gecici olarak durdurulmustur.</p>
+            <p className="mt-1 text-xs text-amber-700">
+              Sistem yoneticisi bu akisi pasife almistir. Yeni belgeler olusturulmaz ve mevcut bekleyen belgeler islenemez. Ayar aktif edildiginde belgeler tekrar gorunur hale gelecektir.
+            </p>
+          </div>
+        ) : depoFlowLoaded && incomingBoyahaneDocs.length > 0 ? (
           <div className="rounded-xl border border-sky-500/30 bg-sky-50 p-4">
             <h3 className="mb-3 text-sm font-semibold text-sky-900">Gelen Boyahane Cikis Belgeleri (Islenmeyi Bekleyen)</h3>
             <div className="space-y-2">
@@ -2589,7 +2679,7 @@ export default function DepoPage() {
           {addError ? <p className="mt-3 text-sm text-rose-600">{addError}</p> : null}
           <div className="mt-4 flex justify-end gap-2">
             <button type="button" onClick={() => setAddOpen(false)} className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100">Vazgec</button>
-            {canManageWarehouse ? <button type="button" onClick={handleAddRoll} className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Kaydet</button> : null}
+            {canManageWarehouse ? <button type="button" onClick={handleAddRoll} disabled={addSaving} className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95 disabled:opacity-60 disabled:cursor-wait">{addSaving ? "Kaydediliyor..." : "Kaydet"}</button> : null}
           </div>
         </Modal>
       ) : null}

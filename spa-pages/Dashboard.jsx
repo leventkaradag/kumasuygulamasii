@@ -85,20 +85,35 @@ const createDashboardSnapshot = () => ({
   progressEntries: weavingLocalRepo.listProgress(),
 });
 
+const emptyDashboardSnapshot = () => ({
+  patterns: [],
+  rolls: [],
+  jobs: [],
+  dispatchDocuments: [],
+  progressEntries: [],
+});
+
 export default function Dashboard() {
   const { displayName, permissions } = useAuthProfile();
-  const [snapshot, setSnapshot] = useState(() => createDashboardSnapshot());
+  const [snapshot, setSnapshot] = useState(emptyDashboardSnapshot);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
+    // Delay slightly to ensure paint happens first, unblocking the main thread
+    const timer = setTimeout(() => {
+      setSnapshot(createDashboardSnapshot());
+      setIsLoaded(true);
+    }, 0);
+
     const refresh = () => {
       setSnapshot(createDashboardSnapshot());
     };
 
-    refresh();
     window.addEventListener("focus", refresh);
     window.addEventListener("storage", refresh);
 
     return () => {
+      clearTimeout(timer);
       window.removeEventListener("focus", refresh);
       window.removeEventListener("storage", refresh);
     };

@@ -84,7 +84,6 @@ export default function LoginPage() {
         : '/pending'
 
     router.replace(nextPath)
-    router.refresh()
   }
 
   return (

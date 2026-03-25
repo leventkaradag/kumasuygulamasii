@@ -26,6 +26,7 @@ import {
 import type { WeavingDispatchDocument } from "@/lib/domain/weaving";
 import { dyehouseLocalRepo } from "@/lib/repos/dyehouseLocalRepo";
 import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
+import { settingsSupabaseRepo } from "@/lib/repos/settingsSupabaseRepo";
 import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 import {
   WORKFLOW_PROGRESS_EPSILON,
@@ -217,14 +218,11 @@ function MetricCard({ title, value, tone = "neutral" }: MetricCardProps) {
 
 export default function Boyahane() {
   const { permissions } = useAuthProfile();
-  const [dyehouses, setDyehouses] = useState<Dyehouse[]>(() => dyehouseLocalRepo.list());
-  const [jobs, setJobs] = useState<DyehouseJob[]>(() => dyehouseLocalRepo.listJobs());
-  const [progressEntries, setProgressEntries] = useState<DyehouseProgressEntry[]>(() =>
-    dyehouseLocalRepo.listProgress()
-  );
-  const [dispatchDocuments, setDispatchDocuments] = useState<WeavingDispatchDocument[]>(() =>
-    weavingLocalRepo.listDispatchDocuments()
-  );
+  const [dyehouses, setDyehouses] = useState<Dyehouse[]>([]);
+  const [jobs, setJobs] = useState<DyehouseJob[]>([]);
+  const [progressEntries, setProgressEntries] = useState<DyehouseProgressEntry[]>([]);
+  const [dispatchDocuments, setDispatchDocuments] = useState<WeavingDispatchDocument[]>([]);
+  
   const [viewMode, setViewMode] = useState<ViewMode>("MIX");
   const [dyehouseFilter, setDyehouseFilter] = useState("ALL");
   const [query, setQuery] = useState("");
@@ -232,6 +230,14 @@ export default function Boyahane() {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
   const canCreateJobs = permissions.dyehouse.create;
+
+  useEffect(() => {
+    // Load local storage data after initial paint to keep transitions fluid
+    setDyehouses(dyehouseLocalRepo.list());
+    setJobs(dyehouseLocalRepo.listJobs());
+    setProgressEntries(dyehouseLocalRepo.listProgress());
+    setDispatchDocuments(weavingLocalRepo.listDispatchDocuments());
+  }, []);
 
   const refreshProgress = () => {
     setProgressEntries(dyehouseLocalRepo.listProgress());
@@ -712,6 +718,13 @@ function JobModal({
   const canAdvanceDyehouse = permissions.dyehouse.advance;
   const canDeleteJob = permissions.dyehouse.delete;
   const canCreateDepotDispatch = permissions.dispatch.create;
+  const [depoFlowEnabled, setDepoFlowEnabled] = useState(true);
+
+  useEffect(() => {
+    settingsSupabaseRepo.isDyehouseToDepotEnabled()
+      .then(setDepoFlowEnabled)
+      .catch(() => setDepoFlowEnabled(true));
+  }, []);
 
   useEffect(() => {
     setLineDrafts(job.lines.map((line) => createLineDraft(line)));
@@ -996,9 +1009,16 @@ function JobModal({
     }
   };
 
-  const createDepotDispatch = () => {
+  const createDepotDispatch = async () => {
     if (!canCreateDepotDispatch) return;
     try {
+      // Real-time server check — authoritative regardless of cached UI state
+      const flowEnabled = await settingsSupabaseRepo.isDyehouseToDepotEnabled();
+      if (!flowEnabled) {
+        setError("Boyahane → Depo akisi sistem yoneticisi tarafindan durdurulmustur.");
+        return;
+      }
+
       if (job.status !== "FINISHED") {
         throw new Error("Depo cikis belgesi sadece biten is emrinden olusturulabilir.");
       }
@@ -1511,9 +1531,13 @@ function JobModal({
               <div className="rounded-lg border border-emerald-500/30 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
                 Belge olustu: <span className="font-mono">{outputDocument.docNo}</span>
               </div>
-            ) : (
+            ) : depoFlowEnabled ? (
               <p className="rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
                 Bu is emri icin henuz Depo cikis belgesi olusturulmadi.
+              </p>
+            ) : (
+               <p className="rounded-lg border border-amber-500/30 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+                Sistem Yoneticisi (Admin) tarafindan Boyahane  Depo akisi gecici olarak durdurulmustur. Yeni cikis belgesi olusturulamaz.
               </p>
             )}
 
@@ -1526,7 +1550,7 @@ function JobModal({
                 >
                   Belgeyi Yazdir
                 </Link>
-              ) : canCreateDepotDispatch ? (
+              ) : canCreateDepotDispatch && depoFlowEnabled ? (
                 <button
                   type="button"
                   onClick={createDepotDispatch}

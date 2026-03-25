@@ -11,6 +11,7 @@ import {
 } from "@/lib/supabase/profile-access";
 import { createClient } from "@/lib/supabase/server";
 import { ConfirmSubmitButton } from "@/components/ConfirmSubmitButton";
+import { AdminSettingsPanel } from "./AdminSettingsPanel";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -326,6 +327,8 @@ export default async function AdminPanelPage({
           <SummaryCard label="Reddedilen" value={rejectedProfiles.length} />
           <SummaryCard label="Toplam" value={allProfiles.length} />
         </section>
+
+        <AdminSettingsPanel />
 
         {successMessage ? (
           <p className="rounded-xl border border-emerald-500/30 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
