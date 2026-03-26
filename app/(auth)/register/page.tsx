@@ -49,7 +49,7 @@ export default function RegisterPage() {
     setErrorText('')
     setMessage('')
 
-    const { data, error } = await supabase.auth.signUp({
+    const { error } = await supabase.auth.signUp({
       email,
       password,
     })
@@ -58,21 +58,6 @@ export default function RegisterPage() {
       setLoading(false)
       setErrorText(error.message)
       return
-    }
-
-    if (data.user) {
-      const { error: profileError } = await supabase.from('profiles').upsert({
-        id: data.user.id,
-        email: data.user.email,
-        role: 'viewer',
-        status: 'pending',
-      })
-
-      if (profileError) {
-        setLoading(false)
-        setErrorText(profileError.message)
-        return
-      }
     }
 
     setLoading(false)

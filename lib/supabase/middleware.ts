@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { canAccessPath } from '@/lib/authz/access'
+import { getSupabaseEnv } from '@/lib/supabase/config'
 import {
   getAuthenticatedRedirectPath,
   getProfileByUserId,
@@ -11,10 +12,11 @@ export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
     request,
   })
+  const { supabaseUrl, supabasePublishableKey } = getSupabaseEnv()
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+    supabaseUrl,
+    supabasePublishableKey,
     {
       cookies: {
         getAll() {

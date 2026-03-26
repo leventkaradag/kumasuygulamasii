@@ -76,17 +76,28 @@ Login ekrani tamamen client-side calisir ve GSAP ile animasyonlu arka plan iceri
 
 ## Ortam Degiskenleri
 
-`.env` icinde:
+`.env.local` icinde:
 
-```
+```env
 NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 ```
 
-Supabase simdilik demo icin yer tutucu olarak eklenmistir.
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` sadece legacy fallback olarak tutulur.
+
+## Supabase Bootstrap
+
+Veritabani ve auth profili kurulumu icin repo kokundeki `supabase_bootstrap.sql`
+dosyasini Supabase SQL Editor uzerinden calistirin.
+
+Sifre sifirlama akisini kullanacaksaniz Supabase Auth ayarlarinda su URL'leri tanimlayin:
+
+- Site URL: `http://localhost:3000`
+- Redirect URL: `http://localhost:3000/reset-password`
 
 ## Notlar
 
-- Demo auth verileri localStorage icinde tutulur.
+- Auth akisi Supabase uzerinden calisir.
 - Tasarim iskeleti moduler sekilde genisletilebilir.
 
