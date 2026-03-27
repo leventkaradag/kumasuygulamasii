@@ -180,6 +180,9 @@ export function PatternDetailPanel({
   const resetArchiveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resetLogisticsStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resetVariantsStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Debounce timer for variant field changes: keeps rapid keystrokes from flooding the network.
+  // Must be declared here (before the early return) to satisfy React hooks ordering rules.
+  const variantFieldSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canEditPattern = permissions.patterns.edit;
   const canDeletePattern = permissions.patterns.delete;
 
@@ -608,8 +611,8 @@ export function PatternDetailPanel({
     }));
 
     patternsSupabaseRepo.update(pattern.id, { variants: normalizedNext }).then((updated) => {
-      const refreshed = normalizeVariants(updated?.variants ?? normalizedNext);
-      setVariantsDraft(refreshed);
+      // Do NOT call setVariantsDraft here — the server response arrives late and would
+      // overwrite characters the user typed after the save started (stale state race).
       onPatternUpdated?.(updated);
       setVariantsStatus("saved");
       resetVariantsStatusTimerRef.current = setTimeout(() => {
@@ -627,17 +630,15 @@ export function PatternDetailPanel({
     if (!isVariantsOpen) {
       setIsVariantsOpen(true);
     }
-
-    const nextVariants = [
-      ...variantsDraft,
-      {
-        id: createVariantId(),
-        colorName: "",
-        colorCode: undefined,
-        name: "",
-      },
-    ];
-    persistVariants(nextVariants);
+    // Functional update: reads the freshest state, never a stale closure snapshot.
+    setVariantsDraft((prev) => {
+      const next = [
+        ...prev,
+        { id: createVariantId(), colorName: "", colorCode: undefined, name: "" },
+      ];
+      persistVariants(next);
+      return next;
+    });
   };
 
   const handleVariantFieldChange = (
@@ -646,27 +647,42 @@ export function PatternDetailPanel({
     rawValue: string
   ) => {
     if (!canEditPattern) return;
-    const nextVariants = variantsDraft.map((variant) => {
-      if (variant.id !== variantId) return variant;
-      if (key === "colorCode") {
-        const trimmed = rawValue.trim();
-        return {
-          ...variant,
-          colorCode: trimmed || undefined,
-        };
-      }
-      return {
-        ...variant,
-        colorName: rawValue,
-      };
+    // Functional update ensures we always diff against the truly latest state,
+    // even when multiple onChange events fire before React flushes.
+    setVariantsDraft((prev) => {
+      const next = prev.map((v) => {
+        if (v.id !== variantId) return v;
+        if (key === "colorCode") {
+          // Do NOT trim during typing — spaces would disappear mid-keystroke.
+          return { ...v, colorCode: rawValue || undefined };
+        }
+        return { ...v, colorName: rawValue };
+      });
+      // Debounce: cancel the previous pending save, schedule a new one.
+      // variantFieldSaveTimerRef was declared at the top of the component (before
+      // the early return) so hook order is never violated.
+      if (variantFieldSaveTimerRef.current) clearTimeout(variantFieldSaveTimerRef.current);
+      variantFieldSaveTimerRef.current = setTimeout(() => {
+        // `next` is captured in this closure — always the version from *this* update,
+        // so it can never be an older snapshot.
+        persistVariants(next);
+      }, 500);
+      return next;
     });
-    persistVariants(nextVariants);
   };
 
   const handleRemoveVariant = (variantId: string) => {
     if (!canEditPattern) return;
-    const nextVariants = variantsDraft.filter((variant) => variant.id !== variantId);
-    persistVariants(nextVariants);
+    // Functional update + immediate save (no debounce needed for deletions).
+    setVariantsDraft((prev) => {
+      const next = prev.filter((v) => v.id !== variantId);
+      if (variantFieldSaveTimerRef.current) {
+        clearTimeout(variantFieldSaveTimerRef.current);
+        variantFieldSaveTimerRef.current = null;
+      }
+      persistVariants(next);
+      return next;
+    });
   };
 
   const openLogisticsEditor = () => {
