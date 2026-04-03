@@ -1169,36 +1169,61 @@ export default function DepoPage() {
       throw new Error("En az bir top girisi ekleyiniz.");
     }
 
-    // Flatten ALL roll inserts into a single Promise.all for maximum parallelism
-    const allInsertJobs: { entry: PendingAddEntry; promise: Promise<FabricRoll> }[] = [];
+    // ── Build flat job list (one job per physical roll to insert) ───────────
+    type InsertJob = { entry: PendingAddEntry; rollIndex: number };
+    const allInsertJobs: InsertJob[] = [];
     for (const entry of entries) {
       for (let i = 0; i < entry.quantity; i++) {
-        allInsertJobs.push({
-          entry,
-          promise: depoSupabaseRepo.addRoll({
-            patternId: entry.patternId,
-            variantId: entry.variantId,
-            colorName: entry.colorName || undefined,
-            meters: entry.meters,
-            inAt: entry.createdAt,
-            note: entry.note,
-          }),
-        });
+        allInsertJobs.push({ entry, rollIndex: i });
       }
     }
 
-    const allRolls = await Promise.all(allInsertJobs.map((j) => j.promise));
+    console.log(
+      `[DEPO] persistPendingAddEntries: ${entries.length} entry, ${allInsertJobs.length} top insert edilecek`
+    );
 
-    // Re-group rolls by (createdAt, note) for transaction creation
+    // ── Sequential insert — partial write önleme ────────────────────────────
+    // Promise.all yerine sıralı await kullanıyoruz:
+    //  • Rate-limit / bağlantı havuzu baskısını azaltır
+    //  • İlk hatayla durur → yarı girmiş kayıt kalmaz
+    //  • Her satırın payload ve sonucunu ayrı ayrı loglamak mümkün olur
+    const addedRolls: FabricRoll[] = [];
+    for (const job of allInsertJobs) {
+      const { entry, rollIndex } = job;
+      const payload = {
+        patternId: entry.patternId,
+        variantId: entry.variantId,
+        colorName: entry.colorName || undefined,
+        meters: entry.meters,          // ← per-roll metres (NOT totalMetres)
+        inAt: entry.createdAt,
+        note: entry.note,
+      };
+      console.log(
+        `[DEPO] addRoll ÖNCE [entry.id=${entry.id} rollIndex=${rollIndex}]`,
+        {
+          patternId:   payload.patternId,
+          variantId:   payload.variantId ?? null,
+          colorName:   payload.colorName ?? null,
+          meters:      payload.meters,          // doğru değer mi?
+          quantity:    entry.quantity,          // kaç fiziksel top?
+          totalMetres: entry.totalMetres,       // metres × quantity
+          inAt:        payload.inAt,
+          note:        payload.note ?? null,
+        }
+      );
+      const roll = await depoSupabaseRepo.addRoll(payload);
+      console.log(
+        `[DEPO] addRoll SONRA [entry.id=${entry.id} rollIndex=${rollIndex}]`,
+        { rollId: roll.id, meters: roll.meters, status: roll.status }
+      );
+      addedRolls.push(roll);
+    }
+
+    // ── Re-group rolls by (createdAt, note) for transaction creation ────────
     const groupedAddedRolls = new Map<
       string,
-      {
-        createdAt: string;
-        note?: string;
-        rolls: FabricRoll[];
-      }
+      { createdAt: string; note?: string; rolls: FabricRoll[] }
     >();
-
     allInsertJobs.forEach((job, index) => {
       const entry = job.entry;
       const groupKey = JSON.stringify([entry.createdAt, entry.note ?? ""]);
@@ -1209,29 +1234,27 @@ export default function DepoPage() {
           rolls: [],
         });
       }
-      groupedAddedRolls.get(groupKey)!.rolls.push(allRolls[index]);
+      groupedAddedRolls.get(groupKey)!.rolls.push(addedRolls[index]);
     });
 
-    // Create transactions in parallel too
+    // ── Create transactions (sequential, after ALL rolls are saved) ─────────
     const combinedSummaryLines: TransactionLineInput[] = [];
-    const txPromises: Promise<void>[] = [];
     for (const group of groupedAddedRolls.values()) {
       const summaryLines = buildTransactionLineInputsFromRolls(group.rolls, patternsById);
       combinedSummaryLines.push(...summaryLines);
-      txPromises.push(
-        depoTransactionsSupabaseRepo.createTransaction({
-          type: "ENTRY",
-          createdAt: group.createdAt,
-          note: group.note,
-          lines: summaryLines,
-        }).then(() => {})
-      );
+      await depoTransactionsSupabaseRepo.createTransaction({
+        type: "ENTRY",
+        createdAt: group.createdAt,
+        note: group.note,
+        lines: summaryLines,
+      });
     }
-    await Promise.all(txPromises);
 
-    const summaryCreatedAt =
-      entries[0]?.createdAt ??
-      new Date().toISOString();
+    const summaryCreatedAt = entries[0]?.createdAt ?? new Date().toISOString();
+
+    console.log(
+      `[DEPO] persistPendingAddEntries TAMAMLANDI: ${addedRolls.length} top kaydedildi`
+    );
 
     // Non-blocking refresh — don't make the user wait
     refreshAll(selectedPattern?.id ?? null);
@@ -1276,31 +1299,33 @@ export default function DepoPage() {
     if (!canManageWarehouse) return;
     if (!selectedPattern) return;
 
-    try {
-      const targetRow = addRows.find((row) => row.id === rowId);
-      if (!targetRow) return;
+    // ── Neden doğrudan addRows okuyoruz? ────────────────────────────────────
+    // setX(updater) → updater React'in reconciliation aşamasında çağrılır,
+    // yani setAddRows(fn)'den sonraki satır fn'yi görmez (fn henüz çalışmadı).
+    // Event handler'lar StrictMode'da çift çağrılmaz; sadece updater/reducer'lar
+    // çift çağrılır. Dolayısıyla buradaki addRows her zaman son committed state.
+    const targetRow = addRows.find((row) => row.id === rowId);
+    if (!targetRow || !hasPositiveMetersDraftValue(targetRow.meters)) return;
 
+    try {
       const parsedRow = parseRollInputRows([targetRow], "Top");
       const note = addNote.trim() || undefined;
       const nextEntries = buildPendingAddEntriesFromParsedRows(parsedRow, note);
 
+      // Tüm setter'lar updater DIŞINDA, bağımsız çağrılıyor.
+      // setPendingAddEntries'in functional updater'ı StrictMode'da 2x çağrılsa da
+      // her iki çağrı aynı `current`'ı alır → aynı sonucu üretir → tek kayıt.
       setPendingAddEntries((current) => [...nextEntries, ...current]);
       setAddRows((current) =>
-        current.map((row) =>
-          row.id === rowId
-            ? {
-                ...row,
-                meters: "",
-              }
-            : row
-        )
+        current.map((row) => (row.id === rowId ? { ...row, meters: "" } : row))
       );
       setAddNote("");
       setAddError("");
-      focusAddMeterInput(rowId);
     } catch (error) {
-      setAddError(error instanceof Error ? error.message : "Top girisi kaydedilemedi");
+      setAddError(error instanceof Error ? error.message : "Top girisi eklenemedi");
     }
+
+    focusAddMeterInput(rowId);
   };
 
   const handleAddRowMetersKeyDown = (

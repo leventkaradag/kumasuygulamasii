@@ -234,7 +234,22 @@ export const depoSupabaseRepo = {
       .select()
       .single<FabricRollRow>();
 
-    if (error || !data) throw new Error(`fabric_rolls.addRoll: ${error?.message}`);
+    if (error || !data) {
+      // Supabase PostgrestError has code / details / hint fields
+      const detail = [
+        error?.message,
+        error?.code ? `code=${error.code}` : null,
+        (error as { details?: string } | null)?.details
+          ? `details=${(error as { details?: string }).details}`
+          : null,
+        (error as { hint?: string } | null)?.hint
+          ? `hint=${(error as { hint?: string }).hint}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" | ");
+      throw new Error(`fabric_rolls.addRoll: ${detail || "unknown error"}`);
+    }
     return mapRowToRoll(data);
   },
 
