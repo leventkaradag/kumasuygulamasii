@@ -719,22 +719,19 @@ export default function DepoPage() {
     setProcessingDocId(doc.id);
     try {
       const createdAt = new Date().toISOString();
-      const rollsToCreate = (doc.variantLines ?? []).map((line) => {
-        return {
-          patternId: doc.patternId,
-          variantId: line.variantId,
-          colorName: line.colorNameSnapshot,
-          meters: line.meters,
-          inAt: createdAt,
-          note: `Boyahane Cikis Fisi: ${doc.docNo}`,
-        };
-      });
+      const rollsToCreate = (doc.variantLines ?? []).map((line) => ({
+        patternId: doc.patternId,
+        variantId: line.variantId,
+        colorName: line.colorNameSnapshot,
+        meters: line.meters,
+        inAt: createdAt,
+        note: `Boyahane Cikis Fisi: ${doc.docNo}`,
+      }));
 
       if (rollsToCreate.length === 0) throw new Error("Belgede satir bulunamadi.");
 
-      const addedRolls = await Promise.all(
-        rollsToCreate.map((roll) => depoSupabaseRepo.addRoll(roll))
-      );
+      // Tek bulk insert → tüm toplar 1 HTTP request'te kaydedilir
+      const addedRolls = await depoSupabaseRepo.addBulkRolls(rollsToCreate);
 
       const summaryLines = buildTransactionLineInputsFromRolls(addedRolls, patternsById);
 
@@ -1170,63 +1167,59 @@ export default function DepoPage() {
       throw new Error("En az bir top girisi ekleyiniz.");
     }
 
-    // ── Build flat job list (one job per physical roll to insert) ───────────
-    type InsertJob = { entry: PendingAddEntry; rollIndex: number };
-    const allInsertJobs: InsertJob[] = [];
+    // ── Build flat payload list (one payload per physical roll) ─────────────
+    // Tüm payload'lar client tarafında oluşturulur; tek bir bulk insert
+    // isteğiyle Supabase'e gönderilir → N top = 1 HTTP request.
+    const allPayloads: Array<{
+      entry: PendingAddEntry;
+      payload: Parameters<typeof depoSupabaseRepo.addBulkRolls>[0][number];
+    }> = [];
+
     for (const entry of entries) {
       for (let i = 0; i < entry.quantity; i++) {
-        allInsertJobs.push({ entry, rollIndex: i });
+        allPayloads.push({
+          entry,
+          payload: {
+            patternId: entry.patternId,
+            variantId: entry.variantId,
+            colorName: entry.colorName || undefined,
+            meters: entry.meters,   // ← top başı metre (totalMetres değil)
+            inAt: entry.createdAt,
+            note: entry.note,
+          },
+        });
       }
     }
 
+    const totalRolls = allPayloads.length;
     console.log(
-      `[DEPO] persistPendingAddEntries: ${entries.length} entry, ${allInsertJobs.length} top insert edilecek`
+      `[DEPO] persistPendingAddEntries: ${entries.length} entry, ${totalRolls} top — tek bulk insert gönderiliyor`
     );
 
-    // ── Sequential insert — partial write önleme ────────────────────────────
-    // Promise.all yerine sıralı await kullanıyoruz:
-    //  • Rate-limit / bağlantı havuzu baskısını azaltır
-    //  • İlk hatayla durur → yarı girmiş kayıt kalmaz
-    //  • Her satırın payload ve sonucunu ayrı ayrı loglamak mümkün olur
-    const addedRolls: FabricRoll[] = [];
-    for (const job of allInsertJobs) {
-      const { entry, rollIndex } = job;
-      const payload = {
-        patternId: entry.patternId,
-        variantId: entry.variantId,
-        colorName: entry.colorName || undefined,
-        meters: entry.meters,          // ← per-roll metres (NOT totalMetres)
-        inAt: entry.createdAt,
-        note: entry.note,
-      };
-      console.log(
-        `[DEPO] addRoll ÖNCE [entry.id=${entry.id} rollIndex=${rollIndex}]`,
-        {
-          patternId:   payload.patternId,
-          variantId:   payload.variantId ?? null,
-          colorName:   payload.colorName ?? null,
-          meters:      payload.meters,          // doğru değer mi?
-          quantity:    entry.quantity,          // kaç fiziksel top?
-          totalMetres: entry.totalMetres,       // metres × quantity
-          inAt:        payload.inAt,
-          note:        payload.note ?? null,
-        }
+    // ── Single bulk insert → 1 network request ──────────────────────────────
+    let addedRolls: FabricRoll[];
+    try {
+      addedRolls = await depoSupabaseRepo.addBulkRolls(
+        allPayloads.map((item) => item.payload)
       );
-      const roll = await depoSupabaseRepo.addRoll(payload);
-      console.log(
-        `[DEPO] addRoll SONRA [entry.id=${entry.id} rollIndex=${rollIndex}]`,
-        { rollId: roll.id, meters: roll.meters, status: roll.status }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Bilinmeyen hata";
+      throw new Error(
+        `${totalRolls} top kaydedilemedi — bulk insert başarısız: ${msg}`
       );
-      addedRolls.push(roll);
     }
 
-    // ── Re-group rolls by (createdAt, note) for transaction creation ────────
+    console.log(
+      `[DEPO] bulk insert TAMAMLANDI: ${addedRolls.length}/${totalRolls} top kaydedildi`
+    );
+
+    // ── Re-group inserted rolls by (createdAt, note) for transaction ────────
     const groupedAddedRolls = new Map<
       string,
       { createdAt: string; note?: string; rolls: FabricRoll[] }
     >();
-    allInsertJobs.forEach((job, index) => {
-      const entry = job.entry;
+    allPayloads.forEach((item, index) => {
+      const { entry } = item;
       const groupKey = JSON.stringify([entry.createdAt, entry.note ?? ""]);
       if (!groupedAddedRolls.has(groupKey)) {
         groupedAddedRolls.set(groupKey, {
@@ -1253,14 +1246,7 @@ export default function DepoPage() {
 
     const summaryCreatedAt = entries[0]?.createdAt ?? new Date().toISOString();
 
-    console.log(
-      `[DEPO] persistPendingAddEntries TAMAMLANDI: ${addedRolls.length} top kaydedildi`
-    );
-
-    // ── Blocking refresh: DB'den guncel veri yukle, sonra don ──────────────
-    // await ile bekliyoruz → modal kapandiginda colorSummary, Top Listesi ve
-    // toplam metre her zaman DB'den gelen taze veriye gore hesaplanir.
-    // Race condition yok: bu satir bitene kadar handleAddRoll donmez.
+    // ── Blocking refresh: DB'den güncel veri yükle, sonra dön ──────────────
     await refreshAll(selectedPattern?.id ?? null);
 
     return {

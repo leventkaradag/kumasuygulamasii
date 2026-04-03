@@ -208,7 +208,7 @@ export const depoSupabaseRepo = {
     return rolls;
   },
 
-  // ── Add ─────────────────────────────────────────────────────────────────
+  // ── Add (single) ─────────────────────────────────────────────────────────
   async addRoll(payload: AddRollPayload): Promise<FabricRoll> {
     const supabase = createClient();
 
@@ -235,7 +235,6 @@ export const depoSupabaseRepo = {
       .single<FabricRollRow>();
 
     if (error || !data) {
-      // Supabase PostgrestError has code / details / hint fields
       const detail = [
         error?.message,
         error?.code ? `code=${error.code}` : null,
@@ -251,6 +250,64 @@ export const depoSupabaseRepo = {
       throw new Error(`fabric_rolls.addRoll: ${detail || "unknown error"}`);
     }
     return mapRowToRoll(data);
+  },
+
+  // ── Add (bulk) ────────────────────────────────────────────────────────────
+  // Tüm fiziksel topları tek bir INSERT isteğiyle Supabase'e gönderir.
+  // N top = 1 network request (N ayrı request yerine).
+  async addBulkRolls(payloads: AddRollPayload[]): Promise<FabricRoll[]> {
+    if (payloads.length === 0) return [];
+    const supabase = createClient();
+
+    const rows: FabricRollRow[] = payloads.map((payload) => ({
+      id: createId(),
+      pattern_id: payload.patternId.trim(),
+      variant_id: normalizeText(payload.variantId) ?? null,
+      color_name: normalizeText(payload.colorName) ?? null,
+      meters: normalizeMeters(payload.meters),
+      roll_no: normalizeText(payload.rollNo) ?? null,
+      status: "IN_STOCK",
+      in_at: toIsoDate(payload.inAt, "inAt"),
+      out_at: null,
+      reserved_at: null,
+      reserved_for: null,
+      counterparty: normalizeText(payload.counterparty) ?? null,
+      note: normalizeText(payload.note) ?? null,
+    }));
+
+    const { data, error } = await supabase
+      .from("fabric_rolls")
+      .insert(rows)
+      .select()
+      .returns<FabricRollRow[]>();
+
+    if (error || !data) {
+      const detail = [
+        error?.message,
+        error?.code ? `code=${error.code}` : null,
+        (error as { details?: string } | null)?.details
+          ? `details=${(error as { details?: string }).details}`
+          : null,
+        (error as { hint?: string } | null)?.hint
+          ? `hint=${(error as { hint?: string }).hint}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" | ");
+      throw new Error(
+        `fabric_rolls.addBulkRolls: ${detail || "unknown error"} (${payloads.length} top insert edilmeye çalışıldı)`
+      );
+    }
+
+    // Supabase INSERT ... SELECT satırları input sırasıyla döndürür.
+    // Yine de gelen row sayısını doğruluyoruz.
+    if (data.length !== rows.length) {
+      throw new Error(
+        `fabric_rolls.addBulkRolls: Beklenen ${rows.length} kayıt yerine ${data.length} kayıt döndü.`
+      );
+    }
+
+    return data.map(mapRowToRoll);
   },
 
   // ── Reserve ──────────────────────────────────────────────────────────────
