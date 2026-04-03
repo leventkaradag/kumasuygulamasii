@@ -622,14 +622,15 @@ export default function DepoPage() {
   }, []);
 
   // Async: patterns + rolls from Supabase (core data for stock tab)
-  const refreshData = useCallback((preferredPatternId?: string | null) => {
+  const refreshData = useCallback(async (preferredPatternId?: string | null): Promise<void> => {
     setIsLoadingRolls(true);
     setRollsError(null);
 
-    Promise.all([
-      patternsSupabaseRepo.list(),
-      depoSupabaseRepo.listRolls(),
-    ]).then(([fetchedPatterns, fetchedRolls]) => {
+    try {
+      const [fetchedPatterns, fetchedRolls] = await Promise.all([
+        patternsSupabaseRepo.list(),
+        depoSupabaseRepo.listRolls(),
+      ]);
       const nextPatterns = sortPatterns(fetchedPatterns.filter(isPatternVisible));
       setPatterns(nextPatterns);
       setRolls(fetchedRolls);
@@ -639,19 +640,19 @@ export default function DepoPage() {
         if (currentId && nextPatterns.some((p) => p.id === currentId)) return currentId;
         return nextPatterns[0]?.id ?? null;
       });
-    }).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : "Veriler yueklenemedi.";
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Veriler yuklenemedi.";
       setRollsError(msg);
       setIsLoadingRolls(false);
-    });
+    }
 
     // Load local sync data (dispatch docs, customers) alongside
     refreshLocalSyncData();
   }, [refreshLocalSyncData]);
 
   // Full refresh including rolls + transactions (for after mutations)
-  const refreshAll = useCallback((preferredPatternId?: string | null) => {
-    refreshData(preferredPatternId);
+  const refreshAll = useCallback(async (preferredPatternId?: string | null): Promise<void> => {
+    await refreshData(preferredPatternId);
     if (txLoadedRef.current) {
       refreshTxData();
     }
@@ -1256,8 +1257,12 @@ export default function DepoPage() {
       `[DEPO] persistPendingAddEntries TAMAMLANDI: ${addedRolls.length} top kaydedildi`
     );
 
-    // Non-blocking refresh — don't make the user wait
-    refreshAll(selectedPattern?.id ?? null);
+    // ── Blocking refresh: DB'den guncel veri yukle, sonra don ──────────────
+    // await ile bekliyoruz → modal kapandiginda colorSummary, Top Listesi ve
+    // toplam metre her zaman DB'den gelen taze veriye gore hesaplanir.
+    // Race condition yok: bu satir bitene kadar handleAddRoll donmez.
+    await refreshAll(selectedPattern?.id ?? null);
+
     return {
       createdAt: summaryCreatedAt,
       summaryLines: combinedSummaryLines,
@@ -2627,10 +2632,21 @@ export default function DepoPage() {
             <div className="rounded-xl border border-black/10 bg-neutral-50 p-3">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Hizli Top Girisi</div>
-                <p className="text-xs text-neutral-500">Metre ve adet girip Enter ile listeye ekleyin. Islemi en son Kaydet ile tamamlayin.</p>
+                <p className="text-xs text-neutral-500">Her satirda: <strong>top basina kac metre?</strong> ve <strong>kac top?</strong> girin. Enter ile listeye ekleyin, en son Kaydet ile tamamlayin.</p>
               </div>
               <div className="mt-3 space-y-2">
-                {addRows.map((row, index) => (
+                {/* Kolon basliklari */}
+                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr),minmax(0,1fr)]">
+                  <div className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+                    Top Basi Metre
+                    <span className="rounded bg-amber-100 px-1 py-0.5 text-[10px] font-bold text-amber-700">m</span>
+                  </div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+                    Top Adedi
+                    <span className="ml-1 text-[10px] font-normal text-neutral-400">(kac top)</span>
+                  </div>
+                </div>
+                {addRows.map((row) => (
                   <div key={row.id} className="grid gap-2 sm:grid-cols-[minmax(0,1fr),minmax(0,1fr)]">
                     <input
                       ref={(node) => {
@@ -2642,8 +2658,8 @@ export default function DepoPage() {
                       value={row.meters}
                       onChange={(event) => updateAddRow(row.id, "meters", event.target.value)}
                       onKeyDown={(event) => handleAddRowMetersKeyDown(event, row.id)}
-                      placeholder={`Top ${index + 1} metre`}
-                      className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                      placeholder="ör: 100"
+                      className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
                     />
                     <input
                       type="number"
@@ -2652,7 +2668,7 @@ export default function DepoPage() {
                       value={row.quantity}
                       onChange={(event) => updateAddRow(row.id, "quantity", event.target.value)}
                       onKeyDown={(event) => handleAddRowMetersKeyDown(event, row.id)}
-                      placeholder="Adet"
+                      placeholder="ör: 4"
                       className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"
                     />
                   </div>
@@ -2674,17 +2690,19 @@ export default function DepoPage() {
               <div className="max-h-[280px] space-y-1 overflow-auto pr-1 text-xs text-neutral-700">
                 {pendingAddEntries.map((entry) => (
                   <div key={entry.id} className="flex items-center justify-between gap-2 rounded-lg border border-black/5 bg-neutral-50 px-2.5 py-2">
-                    <div>
+                    <div className="min-w-0">
+                      {/* Satir 1: renk + formul */}
                       <div className="font-medium text-neutral-900">
-                        {entry.colorName} / {fmt(entry.meters)} m
+                        {entry.colorName}
+                        <span className="mx-1.5 text-neutral-400">/</span>
+                        <span className="text-amber-700">{entry.quantity} top</span>
+                        <span className="mx-1 text-neutral-400">×</span>
+                        <span className="text-amber-700">{fmt(entry.meters)} m/top</span>
+                        <span className="mx-1.5 text-neutral-400">=</span>
+                        <span className="font-semibold text-emerald-700">{fmt(entry.totalMetres)} m toplam</span>
                       </div>
-                      <div>
-                        {entry.quantity} top
-                        {" / "}
-                        Toplam {fmt(entry.totalMetres)} m
-                        {" / "}
-                        {formatDateTime(entry.createdAt)}
-                      </div>
+                      {/* Satir 2: tarih */}
+                      <div className="mt-0.5 text-[10px] text-neutral-400">{formatDateTime(entry.createdAt)}</div>
                     </div>
                     {canManageWarehouse ? (
                       <button
