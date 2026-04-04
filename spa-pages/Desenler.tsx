@@ -8,9 +8,11 @@ import { PatternDetailPanel } from "@/components/PatternDetailPanel";
 import { PatternListItem } from "@/components/PatternListItem";
 import { PatternModal } from "@/components/desen/PatternModal";
 import type { Pattern } from "@/lib/domain/pattern";
+import type { FabricRoll } from "@/lib/domain/depo";
 import type { PatternImageFields } from "@/lib/patternImage";
 import { Stage } from "@/lib/domain/movement";
 import { buildPatternMetricMap } from "@/lib/patternMetrics";
+import { depoSupabaseRepo } from "@/lib/repos/depoSupabaseRepo";
 import { patternsSupabaseRepo } from "@/lib/repos/patternsSupabaseRepo";
 import { cn } from "@/lib/cn";
 import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
@@ -187,6 +189,7 @@ const emptyPatternForCreate: Pattern = {
 export default function DesenlerPage() {
   const { permissions } = useAuthProfile();
   const [patterns, setPatterns] = useState<Pattern[]>(seedPatterns);
+  const [rolls, setRolls] = useState<FabricRoll[]>([]);
   const [patternImagePreviews, setPatternImagePreviews] = useState<Record<string, PatternImageFields>>({});
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<PatternTab>("ACTIVE");
@@ -202,10 +205,14 @@ export default function DesenlerPage() {
 
   useEffect(() => {
     let mounted = true;
-    patternsSupabaseRepo.list().then((data) => {
+    Promise.all([
+      patternsSupabaseRepo.list(),
+      depoSupabaseRepo.listRolls(),
+    ]).then(([patternData, rollData]) => {
       if (!mounted) return;
-      const sorted = sortPatternsByStage(data);
+      const sorted = sortPatternsByStage(patternData);
       setPatterns(sorted);
+      setRolls(rollData);
       setSelectedId(sorted[0]?.id ?? null);
       setIsLoading(false);
     }).catch((err: unknown) => {
@@ -229,7 +236,10 @@ export default function DesenlerPage() {
     () => getFilteredPatterns(displayPatterns, showArchived, search, filters),
     [displayPatterns, showArchived, search, filters]
   );
-  const patternMetricsMap = useMemo(() => buildPatternMetricMap(patterns), [patterns]);
+  const patternMetricsMap = useMemo(
+    () => buildPatternMetricMap(patterns, rolls),
+    [patterns, rolls]
+  );
   const canCreatePattern = permissions.patterns.create;
   const canEditPattern = permissions.patterns.edit;
 
@@ -259,10 +269,14 @@ export default function DesenlerPage() {
   const modalPattern = patternModalMode === "add" ? emptyPatternForCreate : selectedPattern;
 
   const refreshPatterns = (preferredId?: string, forceResetSelection = false) => {
-    patternsSupabaseRepo.list().then((data) => {
+    Promise.all([
+      patternsSupabaseRepo.list(),
+      depoSupabaseRepo.listRolls(),
+    ]).then(([data, rollData]) => {
       setFetchError(null);
       const refreshed = sortPatternsByStage(data);
       setPatterns(refreshed);
+      setRolls(rollData);
 
       const refreshedFiltered = getFilteredPatterns(refreshed, showArchived, search, filters);
       if (preferredId && refreshedFiltered.some((pattern) => pattern.id === preferredId)) {

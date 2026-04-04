@@ -4,7 +4,6 @@ import type { DyehouseJob } from "@/lib/domain/dyehouse";
 import type { WeavingDispatchDocument, WeavingPlan, WeavingProgressEntry } from "@/lib/domain/weaving";
 import { depoLocalRepo } from "@/lib/repos/depoLocalRepo";
 import { dyehouseLocalRepo } from "@/lib/repos/dyehouseLocalRepo";
-import { patternsRepo } from "@/lib/repos/patternsRepo";
 import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
 
 type MeterMetricKey =
@@ -95,16 +94,23 @@ const applyRollToWarehouseMetrics = (
   roll: FabricRoll,
   warehouseByPatternId: Map<string, WarehouseAccumulator>
 ) => {
+  // VOIDED ve SHIPPED toplar hiçbir metriğe katkı sağlamaz.
+  // hasWarehouseData'yı kirletmemek için bu satırların başında kontrol et.
+  // (Eski hata: VOIDED toplar hasWarehouseData=true yapıyor, stockMeters'a katmıyor
+  //  → pattern.stockMeters fallback'i devre dışı → Desenler'de 0 gösteriyordu.)
+  if (roll.status === "VOIDED" || roll.status === "SHIPPED") return;
+
   const bucket = getWarehouseAccumulator(warehouseByPatternId, roll.patternId);
-  bucket.hasWarehouseData = true;
 
   if (roll.status === "IN_STOCK" || roll.status === "RETURNED") {
+    bucket.hasWarehouseData = true;
     bucket.stockMeters += roll.meters;
     bucket.stockRollCount += 1;
     return;
   }
 
   if (roll.status === "RESERVED") {
+    bucket.hasWarehouseData = true;
     bucket.stockMeters += roll.meters;
     bucket.stockRollCount += 1;
     bucket.reservedMeters += roll.meters;
@@ -113,6 +119,7 @@ const applyRollToWarehouseMetrics = (
   }
 
   if (roll.status === "SCRAP") {
+    bucket.hasWarehouseData = true;
     bucket.hasDefectData = true;
     bucket.defectMeters += roll.meters;
     bucket.defectRollCount += 1;
@@ -138,17 +145,8 @@ const sumProducedMetersFromPlan = (
   return normalizeMetricValue(progressByPlanId.get(plan.id));
 };
 
-const getManualMetricFallback = (
-  pattern: Pattern,
-  basePattern: Pattern | undefined,
-  key: MeterMetricKey
-) => {
-  const currentValue = normalizeMetricValue(pattern[key]);
-  if (!basePattern) return currentValue;
 
-  const baseValue = normalizeMetricValue(basePattern[key]);
-  return currentValue !== baseValue ? currentValue : 0;
-};
+
 
 const buildInDyehouseMetricsFromDocuments = (documents: WeavingDispatchDocument[]) => {
   const sentToDyehouse = new Map<string, number>();
@@ -198,12 +196,22 @@ const buildInDyehouseMetricsFromJobs = (jobs: DyehouseJob[]) => {
   };
 };
 
-export const buildPatternMetricMap = (patterns: Pattern[]) => {
+/**
+ * Desen metrik haritasını oluşturur.
+ *
+ * @param patterns  - Supabase'den gelen desen listesi
+ * @param rolls     - Supabase'den gelen kumaş top listesi (isteğe bağlı).
+ *                    Geçilmezse geriye dönük uyumluluk için localStorage'a fallback yapılır.
+ *                    ÖNEMLİ: Depo.tsx'ten çağırıldığında mutlaka Supabase rolleri geçin;
+ *                    localStorage ile Supabase arasında senkronizasyon yoktur.
+ */
+export const buildPatternMetricMap = (patterns: Pattern[], rolls?: FabricRoll[]) => {
   const summaries = new Map<string, PatternMetricSummary>();
-  const basePatternsById = new Map(patternsRepo.list().map((pattern) => [pattern.id, pattern]));
+
+  const rollList: FabricRoll[] = rolls ?? depoLocalRepo.listRolls();
 
   const warehouseByPatternId = new Map<string, WarehouseAccumulator>();
-  depoLocalRepo.listRolls().forEach((roll) => {
+  rollList.forEach((roll) => {
     applyRollToWarehouseMetrics(roll, warehouseByPatternId);
   });
 
@@ -228,7 +236,6 @@ export const buildPatternMetricMap = (patterns: Pattern[]) => {
 
   patterns.forEach((pattern) => {
     const summary = createEmptySummary();
-    const basePattern = basePatternsById.get(pattern.id);
     const warehouse = warehouseByPatternId.get(pattern.id);
 
     summary.stockRollCount = warehouse?.stockRollCount ?? 0;
@@ -240,25 +247,22 @@ export const buildPatternMetricMap = (patterns: Pattern[]) => {
       summary.stockMeters = warehouse.stockMeters;
       summary.sources.stockMeters = "operations";
     } else {
-      summary.stockMeters = getManualMetricFallback(pattern, basePattern, "stockMeters");
+      // Operasyonel (roll) verisi yok → pattern tablosundaki alanı kullan.
+      summary.stockMeters = normalizeMetricValue(pattern.stockMeters);
     }
 
     if (warehouse?.hasDefectData) {
       summary.defectMeters = warehouse.defectMeters;
       summary.sources.defectMeters = "operations";
     } else {
-      summary.defectMeters = getManualMetricFallback(pattern, basePattern, "defectMeters");
+      summary.defectMeters = normalizeMetricValue(pattern.defectMeters);
     }
 
     if (patternsWithProductionData.has(pattern.id)) {
       summary.totalProducedMeters = producedMetersByPatternId.get(pattern.id) ?? 0;
       summary.sources.totalProducedMeters = "operations";
     } else {
-      summary.totalProducedMeters = getManualMetricFallback(
-        pattern,
-        basePattern,
-        "totalProducedMeters"
-      );
+      summary.totalProducedMeters = normalizeMetricValue(pattern.totalProducedMeters);
     }
 
     if (dispatchMetrics.patternsWithDocumentFlow.has(pattern.id)) {
@@ -270,11 +274,7 @@ export const buildPatternMetricMap = (patterns: Pattern[]) => {
       summary.inDyehouseMeters = jobMetrics.openJobMeters.get(pattern.id) ?? 0;
       summary.sources.inDyehouseMeters = "operations";
     } else {
-      summary.inDyehouseMeters = getManualMetricFallback(
-        pattern,
-        basePattern,
-        "inDyehouseMeters"
-      );
+      summary.inDyehouseMeters = normalizeMetricValue(pattern.inDyehouseMeters);
     }
 
     metricKeys.forEach((key) => {
