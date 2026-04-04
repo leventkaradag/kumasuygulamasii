@@ -2,7 +2,6 @@ import type { Pattern } from "@/lib/domain/pattern";
 import type { FabricRoll } from "@/lib/domain/depo";
 import type { DyehouseJob } from "@/lib/domain/dyehouse";
 import type { WeavingDispatchDocument, WeavingPlan, WeavingProgressEntry } from "@/lib/domain/weaving";
-import { depoLocalRepo } from "@/lib/repos/depoLocalRepo";
 import { dyehouseLocalRepo } from "@/lib/repos/dyehouseLocalRepo";
 import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
 
@@ -200,18 +199,16 @@ const buildInDyehouseMetricsFromJobs = (jobs: DyehouseJob[]) => {
  * Desen metrik haritasını oluşturur.
  *
  * @param patterns  - Supabase'den gelen desen listesi
- * @param rolls     - Supabase'den gelen kumaş top listesi (isteğe bağlı).
- *                    Geçilmezse geriye dönük uyumluluk için localStorage'a fallback yapılır.
- *                    ÖNEMLİ: Depo.tsx'ten çağırıldığında mutlaka Supabase rolleri geçin;
- *                    localStorage ile Supabase arasında senkronizasyon yoktur.
+ * @param rolls     - Supabase'den gelen kumaş top listesi.
+ *                    Her iki sayfa (Depo + Desenler) aynı kaynaktan (depoSupabaseRepo.listRolls)
+ *                    aldığı rolls listesini buraya geçirmelidir.
+ *                    Geçilmezse boş array kullanılır (localStorage fallback yok).
  */
-export const buildPatternMetricMap = (patterns: Pattern[], rolls?: FabricRoll[]) => {
+export const buildPatternMetricMap = (patterns: Pattern[], rolls: FabricRoll[] = []) => {
   const summaries = new Map<string, PatternMetricSummary>();
 
-  const rollList: FabricRoll[] = rolls ?? depoLocalRepo.listRolls();
-
   const warehouseByPatternId = new Map<string, WarehouseAccumulator>();
-  rollList.forEach((roll) => {
+  rolls.forEach((roll) => {
     applyRollToWarehouseMetrics(roll, warehouseByPatternId);
   });
 

@@ -173,7 +173,8 @@ export const depoSupabaseRepo = {
     let query = supabase
       .from("fabric_rolls")
       .select("*")
-      .order("in_at", { ascending: false });
+      .order("in_at", { ascending: false })
+      .range(0, 49999); // Supabase PostgREST varsayılan 1000 satır limitini aş
 
     if (filters.patternId) query = query.eq("pattern_id", filters.patternId);
     if (filters.variantId) query = query.eq("variant_id", filters.variantId);
