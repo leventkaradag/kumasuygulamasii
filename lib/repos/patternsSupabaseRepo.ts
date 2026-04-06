@@ -146,6 +146,31 @@ function incrementMeters(
   return { ...pattern, defectMeters: pattern.defectMeters + metersToAdd };
 }
 
+function normalizePatternCode(value: string): string {
+  return value.trim().toLocaleUpperCase("tr-TR");
+}
+
+function isUniqueConstraintError(error: { code?: string | null } | null | undefined): boolean {
+  return error?.code === "23505";
+}
+
+async function findPatternsByNormalizedFabricCode(
+  supabase: ReturnType<typeof createClient>,
+  normalizedFabricCode: string
+): Promise<PatternRow[]> {
+  const { data, error } = await supabase
+    .from("patterns")
+    .select("*")
+    .ilike("fabric_code", normalizedFabricCode)
+    .returns<PatternRow[]>();
+
+  if (error) throw new Error(`patterns.findByFabricCode: ${error.message}`);
+
+  return (data ?? []).filter(
+    (row) => normalizePatternCode(row.fabric_code) === normalizedFabricCode
+  );
+}
+
 // ─── Repository ───────────────────────────────────────────────────────────────
 
 export const patternsSupabaseRepo = {
@@ -197,7 +222,7 @@ export const patternsSupabaseRepo = {
     const supabase = createClient();
 
     const originalPatternId = payload.originalPatternId?.trim() || undefined;
-    const fabricCode = payload.fabricCode.trim();
+    const fabricCode = normalizePatternCode(payload.fabricCode);
     const currentStage = payload.currentStage ?? "DEPO";
     const metersToAdd = typeof payload.metersToAdd === "number" && payload.metersToAdd > 0
       ? payload.metersToAdd
@@ -217,29 +242,25 @@ export const patternsSupabaseRepo = {
       existingById = data as PatternRow;
     }
 
-    // Check for existing pattern by fabricCode
-    const { data: existingByCode, error: fetchError } = await supabase
-      .from("patterns")
-      .select("*")
-      .eq("fabric_code", fabricCode)
-      .maybeSingle();
-
-    if (fetchError) throw new Error(`patterns.upsert fetch: ${fetchError.message}`);
+    const matchingPatterns = await findPatternsByNormalizedFabricCode(supabase, fabricCode);
+    const existingByCode = matchingPatterns[0] ?? null;
 
     if (
       existingById &&
       existingByCode &&
       existingByCode.id !== existingById.id
     ) {
-      throw new Error("Bu kumas kodu baska bir desende kullaniliyor.");
+      throw new Error("Bu desen kodu zaten kullanılıyor.");
+    }
+
+    if (!existingById && existingByCode) {
+      throw new Error("Bu desen kodu zaten kullanılıyor.");
     }
 
     let base: Pattern;
 
     if (existingById) {
       base = mapDbToPattern(existingById);
-    } else if (existingByCode) {
-      base = mapDbToPattern(existingByCode as PatternRow);
     } else {
       // New pattern — id = fabricCode (matches local repo behaviour)
       base = {
@@ -299,18 +320,17 @@ export const patternsSupabaseRepo = {
         .select()
         .maybeSingle();
 
-      if (updateError) throw new Error(`patterns.upsert update: ${updateError.message}`);
+      if (updateError) {
+        if (isUniqueConstraintError(updateError)) {
+          throw new Error("Bu desen kodu zaten kullanılıyor.");
+        }
+        throw new Error(`patterns.upsert update: ${updateError.message}`);
+      }
       if (!updated) throw new Error("patterns.upsert update: no data returned");
       return mapDbToPattern(updated as PatternRow);
     }
 
     const dbRow = mapPatternToDb(next);
-
-    // Check for id collision (different id, same fabric_code conflict)
-    if (existingByCode && existingByCode.id !== next.id) {
-      // The existing row has a different id; use the existing id to avoid FK chaos
-      next = { ...next, id: existingByCode.id };
-    }
 
     const { data: upserted, error: upsertError } = await supabase
       .from("patterns")
@@ -318,7 +338,12 @@ export const patternsSupabaseRepo = {
       .select()
       .maybeSingle();
 
-    if (upsertError) throw new Error(`patterns.upsert write: ${upsertError.message}`);
+    if (upsertError) {
+      if (isUniqueConstraintError(upsertError)) {
+        throw new Error("Bu desen kodu zaten kullanılıyor.");
+      }
+      throw new Error(`patterns.upsert write: ${upsertError.message}`);
+    }
     if (!upserted) throw new Error("patterns.upsert: no data returned");
 
     return mapDbToPattern(upserted as PatternRow);
