@@ -24,7 +24,7 @@ import type { WeavingPlan, WeavingProgressEntry, WeavingDispatchDocument } from 
 import { downloadDepoDailyEntryReportXlsx } from "@/lib/export/depoDailyEntryExcel";
 import { buildPatternNoteHistory, type PatternNoteEntry } from "@/lib/patternNoteHistory";
 import { customersLocalRepo, normalizeCustomerName } from "@/lib/repos/customersLocalRepo";
-import { depoSupabaseRepo } from "@/lib/repos/depoSupabaseRepo";
+import { depoSupabaseRepo, listAllRollsFromSupabase } from "@/lib/repos/depoSupabaseRepo";
 import { settingsSupabaseRepo } from "@/lib/repos/settingsSupabaseRepo";
 import { depoTransactionsSupabaseRepo } from "@/lib/repos/depoTransactionsSupabaseRepo";
 import { patternsSupabaseRepo } from "@/lib/repos/patternsSupabaseRepo";
@@ -166,6 +166,12 @@ const statusSortPriority: Record<FabricRollStatus, number> = {
   SCRAP: 4,
   SHIPPED: 5,
 };
+
+const STOCK_VISIBLE_STATUSES = new Set<FabricRollStatus>([
+  "IN_STOCK",
+  "RESERVED",
+  "RETURNED",
+]);
 
 const transactionTypeLabel: Record<DepoTransactionType, string> = {
   ENTRY: "Depo Giris",
@@ -629,7 +635,7 @@ export default function DepoPage() {
     try {
       const [fetchedPatterns, fetchedRolls] = await Promise.all([
         patternsSupabaseRepo.list(),
-        depoSupabaseRepo.listRolls(),
+        listAllRollsFromSupabase(),
       ]);
       const nextPatterns = sortPatterns(fetchedPatterns.filter(isPatternVisible));
       setPatterns(nextPatterns);
@@ -820,7 +826,7 @@ export default function DepoPage() {
       (roll) =>
         roll.patternId === selectedPattern.id &&
         roll.status !== "VOIDED" &&
-        (roll.status === "IN_STOCK" || roll.status === "RESERVED")
+        STOCK_VISIBLE_STATUSES.has(roll.status)
     );
   }, [rollsInRange, selectedPattern]);
 
@@ -830,7 +836,7 @@ export default function DepoPage() {
       (roll) =>
         roll.patternId === selectedPattern.id &&
         roll.status !== "VOIDED" &&
-        (roll.status === "IN_STOCK" || roll.status === "RESERVED")
+        STOCK_VISIBLE_STATUSES.has(roll.status)
     );
   }, [rolls, selectedPattern]);
 
@@ -875,7 +881,7 @@ export default function DepoPage() {
           return toTimestamp(b.inAt) - toTimestamp(a.inAt);
         });
         const inStockRolls = sortedRolls
-          .filter((roll) => roll.status === "IN_STOCK")
+          .filter((roll) => roll.status === "IN_STOCK" || roll.status === "RETURNED")
           .sort((a, b) => toTimestamp(a.inAt) - toTimestamp(b.inAt));
         const reservedRolls = sortedRolls.filter((roll) => roll.status === "RESERVED");
         const shippedRolls = sortedRolls.filter((roll) => roll.status === "SHIPPED");
@@ -1067,9 +1073,11 @@ export default function DepoPage() {
 
   const colorSummary = useMemo(() => (selectedPattern ? buildColorSummary(selectedPatternRolls, selectedPattern) : []), [selectedPatternRolls, selectedPattern]);
 
-  const totalRolls = rollsInRange.filter((roll) => roll.status === "IN_STOCK" || roll.status === "RESERVED");
+  const totalRolls = rollsInRange.filter((roll) => STOCK_VISIBLE_STATUSES.has(roll.status));
   const reservedRolls = rollsInRange.filter((roll) => roll.status === "RESERVED");
-  const availableRolls = rollsInRange.filter((roll) => roll.status === "IN_STOCK");
+  const availableRolls = rollsInRange.filter(
+    (roll) => roll.status === "IN_STOCK" || roll.status === "RETURNED"
+  );
 
   const updateAddRow = (rowId: string, field: keyof Omit<RollInputRow, "id">, value: string) => {
     setAddRows((current) =>
@@ -2189,7 +2197,7 @@ export default function DepoPage() {
                     <h3 className="text-sm font-semibold text-neutral-900">Top Listesi</h3>
                     <div className="flex flex-wrap items-center gap-2">
                       <input type="search" value={rollSearch} onChange={(e) => setRollSearch(e.target.value)} placeholder="RollNo / renk ara" className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
-                      <select value={rollStatus} onChange={(e) => setRollStatus(e.target.value as FabricRollStatus | "")} className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"><option value="">Tum Durumlar</option><option value="IN_STOCK">Stokta</option><option value="RESERVED">Rezerve</option></select>
+                      <select value={rollStatus} onChange={(e) => setRollStatus(e.target.value as FabricRollStatus | "")} className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary"><option value="">Tum Durumlar</option><option value="IN_STOCK">Stokta</option><option value="RESERVED">Rezerve</option><option value="RETURNED">Iade</option></select>
                     </div>
                   </div>
                   {canUseBasket ? (

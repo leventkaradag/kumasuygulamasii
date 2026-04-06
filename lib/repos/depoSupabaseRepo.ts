@@ -19,6 +19,8 @@ type FabricRollRow = {
   note: string | null;
 };
 
+type PatternMeterSyncRow = Pick<FabricRollRow, "pattern_id" | "meters" | "status">;
+
 // ─── Mappers ──────────────────────────────────────────────────────────────────
 
 const VALID_STATUSES: FabricRollStatus[] = [
@@ -100,6 +102,71 @@ const normalizeMeters = (value: number): number => {
   return numeric;
 };
 
+const STOCK_METER_STATUSES = new Set<FabricRollStatus>([
+  "IN_STOCK",
+  "RESERVED",
+  "RETURNED",
+]);
+
+const DEFECT_METER_STATUSES = new Set<FabricRollStatus>(["SCRAP"]);
+
+const syncPatternWarehouseMeters = async (
+  supabase: ReturnType<typeof createClient>,
+  patternIds: string[]
+): Promise<void> => {
+  const uniquePatternIds = Array.from(
+    new Set(patternIds.map((patternId) => patternId.trim()).filter(Boolean))
+  );
+  if (uniquePatternIds.length === 0) return;
+
+  const { data, error } = await supabase
+    .from("fabric_rolls")
+    .select("pattern_id, meters, status")
+    .in("pattern_id", uniquePatternIds)
+    .returns<PatternMeterSyncRow[]>();
+
+  if (error) {
+    throw new Error(`patterns.syncMeters fetch: ${error.message}`);
+  }
+
+  const totalsByPatternId = new Map<string, { stockMeters: number; defectMeters: number }>();
+  uniquePatternIds.forEach((patternId) => {
+    totalsByPatternId.set(patternId, { stockMeters: 0, defectMeters: 0 });
+  });
+
+  (data ?? []).forEach((row) => {
+    const bucket = totalsByPatternId.get(row.pattern_id);
+    if (!bucket) return;
+
+    const meters = Number(row.meters);
+    if (!Number.isFinite(meters) || meters <= 0) return;
+    if (!isValidStatus(row.status)) return;
+
+    if (STOCK_METER_STATUSES.has(row.status)) {
+      bucket.stockMeters += meters;
+      return;
+    }
+
+    if (DEFECT_METER_STATUSES.has(row.status)) {
+      bucket.defectMeters += meters;
+    }
+  });
+
+  for (const [patternId, totals] of totalsByPatternId.entries()) {
+    const { error: updateError } = await supabase
+      .from("patterns")
+      .update({
+        stock_meters: totals.stockMeters,
+        defect_meters: totals.defectMeters,
+      })
+      .eq("id", patternId);
+
+    if (updateError) {
+      throw new Error(`patterns.syncMeters update: ${updateError.message}`);
+    }
+  }
+};
+
 // ─── Internal updater ─────────────────────────────────────────────────────────
 
 const updateRoll = async (
@@ -130,7 +197,9 @@ const updateRoll = async (
     .single<FabricRollRow>();
 
   if (updateError || !updated) throw new Error(`fabric_rolls.update: ${updateError?.message}`);
-  return mapRowToRoll(updated);
+  const nextRoll = mapRowToRoll(updated);
+  await syncPatternWarehouseMeters(supabase, [nextRoll.patternId]);
+  return nextRoll;
 };
 
 // ─── Payload types (mirrors depoLocalRepo) ───────────────────────────────────
@@ -162,6 +231,61 @@ export type RollFilters = {
   to?: string;
   q?: string;
 };
+
+const LIST_ROLLS_PAGE_SIZE = 1000;
+
+export async function listAllRollsFromSupabase(
+  filters: RollFilters = {}
+): Promise<FabricRoll[]> {
+  const supabase = createClient();
+  const rows: FabricRollRow[] = [];
+
+  for (let from = 0; ; from += LIST_ROLLS_PAGE_SIZE) {
+    const to = from + LIST_ROLLS_PAGE_SIZE - 1;
+
+    let query = supabase
+      .from("fabric_rolls")
+      .select("*")
+      .order("in_at", { ascending: false })
+      .range(from, to);
+
+    if (filters.patternId) query = query.eq("pattern_id", filters.patternId);
+    if (filters.variantId) query = query.eq("variant_id", filters.variantId);
+    if (filters.status) query = query.eq("status", filters.status);
+    if (filters.from) query = query.gte("in_at", toIsoDate(filters.from, "from"));
+    if (filters.to) {
+      const raw = filters.to.trim();
+      const endOfDay = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+        ? `${raw}T23:59:59.999Z`
+        : raw;
+      query = query.lte("in_at", endOfDay);
+    }
+
+    const { data, error } = await query.returns<FabricRollRow[]>();
+
+    if (error) throw new Error(`fabric_rolls.listAll: ${error.message}`);
+
+    const chunk = data ?? [];
+    rows.push(...chunk);
+
+    if (chunk.length < LIST_ROLLS_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  let rolls = rows.map(mapRowToRoll);
+
+  if (filters.q) {
+    const normalized = filters.q.trim().toLocaleLowerCase("tr-TR");
+    rolls = rolls.filter((roll) => {
+      const no = (roll.rollNo ?? "").toLocaleLowerCase("tr-TR");
+      const color = (roll.colorName ?? "").toLocaleLowerCase("tr-TR");
+      return no.includes(normalized) || color.includes(normalized);
+    });
+  }
+
+  return rolls;
+}
 
 // ─── Repository ───────────────────────────────────────────────────────────────
 
@@ -250,7 +374,9 @@ export const depoSupabaseRepo = {
         .join(" | ");
       throw new Error(`fabric_rolls.addRoll: ${detail || "unknown error"}`);
     }
-    return mapRowToRoll(data);
+    const addedRoll = mapRowToRoll(data);
+    await syncPatternWarehouseMeters(supabase, [addedRoll.patternId]);
+    return addedRoll;
   },
 
   // ── Add (bulk) ────────────────────────────────────────────────────────────
@@ -308,7 +434,12 @@ export const depoSupabaseRepo = {
       );
     }
 
-    return data.map(mapRowToRoll);
+    const addedRolls = data.map(mapRowToRoll);
+    await syncPatternWarehouseMeters(
+      supabase,
+      addedRolls.map((roll) => roll.patternId)
+    );
+    return addedRolls;
   },
 
   // ── Reserve ──────────────────────────────────────────────────────────────

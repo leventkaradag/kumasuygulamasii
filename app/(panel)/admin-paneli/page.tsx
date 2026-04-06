@@ -11,6 +11,7 @@ import {
 } from "@/lib/supabase/profile-access";
 import { createClient } from "@/lib/supabase/server";
 import { ConfirmSubmitButton } from "@/components/ConfirmSubmitButton";
+import { backfillAllPatternWarehouseMeters } from "@/lib/repos/depoBackfill.server";
 import { AdminSettingsPanel } from "./AdminSettingsPanel";
 
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -259,6 +260,32 @@ async function softRemoveUserAction(formData: FormData) {
   redirectWithFeedback("success", "Kullanici sistemden cikarildi.");
 }
 
+async function backfillPatternWarehouseMetersAction(formData: FormData) {
+  "use server";
+
+  void formData;
+  await requireSuperadminAccess();
+
+  try {
+    const result = await backfillAllPatternWarehouseMeters();
+
+    revalidatePath("/admin-paneli");
+    revalidatePath("/dashboard");
+    revalidatePath("/depo");
+    revalidatePath("/desenler");
+
+    redirectWithFeedback(
+      "success",
+      `Depo metre backfill tamamlandi. ${result.patternCount} desen ve ${result.rollCount} top yeniden tarandi; ${result.changedPatternCount} desen guncellendi.`
+    );
+  } catch (error) {
+    redirectWithFeedback(
+      "error",
+      error instanceof Error ? error.message : "Depo metre backfill calistirilamadi."
+    );
+  }
+}
+
 export default async function AdminPanelPage({
   searchParams,
 }: {
@@ -329,6 +356,44 @@ export default async function AdminPanelPage({
         </section>
 
         <AdminSettingsPanel />
+
+        <section className="rounded-[28px] border border-amber-500/20 bg-amber-50/70 p-6 shadow-[0_10px_24px_rgba(0,0,0,0.06)]">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-3xl">
+              <div className="text-xs uppercase tracking-[0.18em] text-amber-700">
+                Tek Seferlik Bakim
+              </div>
+              <h2 className="mt-2 text-xl font-semibold text-neutral-900">
+                Depo Stok Metre Backfill
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-neutral-700">
+                Bu islem tum desen kayitlarini dolasir, her desen icin mevcut
+                <code className="mx-1 rounded bg-white/80 px-1.5 py-0.5 text-[13px]">
+                  fabric_rolls
+                </code>
+                verisini sifirdan tarar ve sonucunu
+                <code className="mx-1 rounded bg-white/80 px-1.5 py-0.5 text-[13px]">
+                  patterns.stock_meters
+                </code>
+                ile
+                <code className="mx-1 rounded bg-white/80 px-1.5 py-0.5 text-[13px]">
+                  patterns.defect_meters
+                </code>
+                alanlarina yazar. Gelecekteki depo mutasyonlari icin sync zaten ayri
+                olarak calisir; bu buton gecmis veriyi bir kereye mahsus hizalamak
+                icindir.
+              </p>
+            </div>
+
+            <ConfirmSubmitButton
+              className="rounded-xl border border-amber-600/30 bg-white px-4 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100"
+              confirmMessage="Tum desenlerin depo metre alanlari, fabric_rolls kayitlarindan sifirdan yeniden hesaplansin mi? Bu islem gecmis aggregate alanlarini duzeltir."
+              formAction={backfillPatternWarehouseMetersAction}
+            >
+              Backfill&apos;i Calistir
+            </ConfirmSubmitButton>
+          </div>
+        </section>
 
         {successMessage ? (
           <p className="rounded-xl border border-emerald-500/30 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
