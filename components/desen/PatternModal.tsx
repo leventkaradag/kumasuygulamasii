@@ -164,6 +164,7 @@ export function PatternModal({ pattern, onClose, onSave }: Props) {
     }
 
     const payload: UpsertPatternFromFormPayload = {
+      originalPatternId: pattern.id || undefined,
       fabricCode: fabricCode.trim(),
       fabricName: fabricName.trim(),
       weaveType: weaveType.trim(),

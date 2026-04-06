@@ -12,6 +12,7 @@ export type UpsertPatternFromFormPayload = Pick<
   Pattern,
   "fabricCode" | "fabricName" | "weaveType" | "warpCount" | "weftCount" | "totalEnds"
 > & {
+  originalPatternId?: string;
   currentStage?: Stage;
   tarakEniCm?: number | null;
   color?: string;
@@ -195,6 +196,7 @@ export const patternsSupabaseRepo = {
   async upsertPatternFromForm(payload: UpsertPatternFromFormPayload): Promise<Pattern> {
     const supabase = createClient();
 
+    const originalPatternId = payload.originalPatternId?.trim() || undefined;
     const fabricCode = payload.fabricCode.trim();
     const currentStage = payload.currentStage ?? "DEPO";
     const metersToAdd = typeof payload.metersToAdd === "number" && payload.metersToAdd > 0
@@ -202,8 +204,21 @@ export const patternsSupabaseRepo = {
       : 0;
     const metersTarget = resolveMetersTarget(payload.metersTarget ?? "AUTO", currentStage);
 
+    let existingById: PatternRow | null = null;
+    if (originalPatternId) {
+      const { data, error } = await supabase
+        .from("patterns")
+        .select("*")
+        .eq("id", originalPatternId)
+        .maybeSingle();
+
+      if (error) throw new Error(`patterns.upsert fetch by id: ${error.message}`);
+      if (!data) throw new Error("patterns.upsert: duzenlenecek desen bulunamadi");
+      existingById = data as PatternRow;
+    }
+
     // Check for existing pattern by fabricCode
-    const { data: existing, error: fetchError } = await supabase
+    const { data: existingByCode, error: fetchError } = await supabase
       .from("patterns")
       .select("*")
       .eq("fabric_code", fabricCode)
@@ -211,10 +226,20 @@ export const patternsSupabaseRepo = {
 
     if (fetchError) throw new Error(`patterns.upsert fetch: ${fetchError.message}`);
 
+    if (
+      existingById &&
+      existingByCode &&
+      existingByCode.id !== existingById.id
+    ) {
+      throw new Error("Bu kumas kodu baska bir desende kullaniliyor.");
+    }
+
     let base: Pattern;
 
-    if (existing) {
-      base = mapDbToPattern(existing as PatternRow);
+    if (existingById) {
+      base = mapDbToPattern(existingById);
+    } else if (existingByCode) {
+      base = mapDbToPattern(existingByCode as PatternRow);
     } else {
       // New pattern — id = fabricCode (matches local repo behaviour)
       base = {
@@ -265,12 +290,26 @@ export const patternsSupabaseRepo = {
     // Increment meters
     next = incrementMeters(next, metersTarget, metersToAdd);
 
+    if (existingById) {
+      const dbPatch = mapPatternToDb(next);
+      const { data: updated, error: updateError } = await supabase
+        .from("patterns")
+        .update(dbPatch)
+        .eq("id", existingById.id)
+        .select()
+        .maybeSingle();
+
+      if (updateError) throw new Error(`patterns.upsert update: ${updateError.message}`);
+      if (!updated) throw new Error("patterns.upsert update: no data returned");
+      return mapDbToPattern(updated as PatternRow);
+    }
+
     const dbRow = mapPatternToDb(next);
 
     // Check for id collision (different id, same fabric_code conflict)
-    if (existing && existing.id !== next.id) {
+    if (existingByCode && existingByCode.id !== next.id) {
       // The existing row has a different id; use the existing id to avoid FK chaos
-      next = { ...next, id: existing.id };
+      next = { ...next, id: existingByCode.id };
     }
 
     const { data: upserted, error: upsertError } = await supabase
