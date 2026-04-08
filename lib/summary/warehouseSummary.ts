@@ -46,11 +46,46 @@ type WarehouseEvent = {
 
 const normalizeText = (value: string | null | undefined) => {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
+  return trimmed ? trimmed.replace(/\s+/g, " ") : null;
 };
 
 const createPatternLabel = (patternCode: string, patternName: string) =>
   patternName && patternName !== patternCode ? `${patternCode} / ${patternName}` : patternCode;
+
+const UNKNOWN_CUSTOMER_NAME = "Musteri belirtilmedi";
+
+const isUnknownCustomerName = (value: string | null | undefined) =>
+  normalizeCustomerName(value ?? "") === normalizeCustomerName(UNKNOWN_CUSTOMER_NAME);
+
+const hasReadableCase = (value: string) => /[a-zçğıöşü]/u.test(value);
+
+const chooseCustomerLabel = (current: string, candidate: string) => {
+  const normalizedCurrent = normalizeText(current);
+  const normalizedCandidate = normalizeText(candidate);
+
+  if (!normalizedCandidate) return current;
+  if (!normalizedCurrent) return normalizedCandidate;
+  if (isUnknownCustomerName(normalizedCurrent) && !isUnknownCustomerName(normalizedCandidate)) {
+    return normalizedCandidate;
+  }
+  if (isUnknownCustomerName(normalizedCandidate)) return normalizedCurrent;
+  if (!hasReadableCase(normalizedCurrent) && hasReadableCase(normalizedCandidate)) {
+    return normalizedCandidate;
+  }
+  return normalizedCandidate.length > normalizedCurrent.length
+    ? normalizedCandidate
+    : normalizedCurrent;
+};
+
+const buildCustomerKey = (customerName: string, customerId: string | null) => {
+  const normalizedName = normalizeCustomerName(customerName);
+  if (normalizedName) return `customer:${normalizedName}`;
+
+  const normalizedId = normalizeText(customerId);
+  if (normalizedId) return `customer-id:${normalizedId}`;
+
+  return "customer:tanimsiz";
+};
 
 const sortByMetres = <T extends { totalMetres: number; totalTops: number }>(left: T, right: T) => {
   if (right.totalMetres !== left.totalMetres) return right.totalMetres - left.totalMetres;
@@ -86,6 +121,54 @@ const resolveRollColor = (roll: FabricRoll, patternsById: Map<string, Pattern>) 
   return normalizeText(roll.colorName) ?? "Renk belirtilmedi";
 };
 
+const resolveCustomerNameFromRolls = (
+  lines: DepoTransactionLine[],
+  rollsById: Map<string, FabricRoll>
+) => {
+  const candidateCounts = new Map<string, number>();
+  const candidateLabels = new Map<string, string>();
+
+  lines.forEach((line) => {
+    (line.rollIds ?? []).forEach((rollId) => {
+      const roll = rollsById.get(rollId);
+      if (!roll) return;
+
+      [roll.counterparty, roll.reservedFor].forEach((candidate) => {
+        const normalized = normalizeText(candidate);
+        if (!normalized) return;
+
+        const key = normalizeCustomerName(normalized);
+        if (!key) return;
+
+        candidateCounts.set(key, (candidateCounts.get(key) ?? 0) + 1);
+        candidateLabels.set(key, chooseCustomerLabel(candidateLabels.get(key) ?? "", normalized));
+      });
+    });
+  });
+
+  const winner = Array.from(candidateCounts.entries())
+    .sort((left, right) => {
+      if (right[1] !== left[1]) return right[1] - left[1];
+      return (candidateLabels.get(left[0]) ?? "").localeCompare(
+        candidateLabels.get(right[0]) ?? "",
+        "tr-TR"
+      );
+    })[0]?.[0];
+
+  return winner ? candidateLabels.get(winner) ?? null : null;
+};
+
+const resolveTransactionCustomerName = (
+  transaction: DepoTransaction,
+  lines: DepoTransactionLine[],
+  customersById: Map<string, Customer>,
+  rollsById: Map<string, FabricRoll>
+) =>
+  normalizeText(transaction.customerNameSnapshot) ??
+  resolveCustomerNameFromRolls(lines, rollsById) ??
+  normalizeText(customersById.get(transaction.customerId ?? "")?.nameOriginal) ??
+  UNKNOWN_CUSTOMER_NAME;
+
 export const buildWarehouseSummary = ({
   range,
   scale,
@@ -112,6 +195,7 @@ export const buildWarehouseSummary = ({
 
   const patternsById = new Map(patterns.map((pattern) => [pattern.id, pattern]));
   const customersById = new Map(customers.map((customer) => [customer.id, customer]));
+  const rollsById = new Map(rolls.map((roll) => [roll.id, roll]));
   const linesByTransactionId = new Map<string, DepoTransactionLine[]>();
 
   transactionLines.forEach((line) => {
@@ -121,9 +205,22 @@ export const buildWarehouseSummary = ({
   });
 
   const transactionsById = new Map(transactions.map((transaction) => [transaction.id, transaction]));
+  const reversedShipmentIds = new Set(
+    transactions
+      .filter(
+        (transaction) =>
+          transaction.type === "REVERSAL" &&
+          transaction.targetTransactionId &&
+          transactionsById.get(transaction.targetTransactionId)?.type === "SHIPMENT"
+      )
+      .map((transaction) => transaction.targetTransactionId as string)
+  );
 
   const activeShipmentTransactions = transactions.filter(
-    (transaction) => transaction.type === "SHIPMENT" && transaction.status === "ACTIVE"
+    (transaction) =>
+      transaction.type === "SHIPMENT" &&
+      transaction.status !== "REVERSED" &&
+      !reversedShipmentIds.has(transaction.id)
   );
 
   const returnTransactions = transactions.filter((transaction) => {
@@ -135,13 +232,13 @@ export const buildWarehouseSummary = ({
   const shipmentEvents: WarehouseEvent[] = [];
   activeShipmentTransactions.forEach((transaction) => {
     const lines = linesByTransactionId.get(transaction.id) ?? [];
-    const customerName =
-      normalizeText(transaction.customerNameSnapshot) ??
-      normalizeText(customersById.get(transaction.customerId ?? "")?.nameOriginal) ??
-      "Musteri belirtilmedi";
-    const customerKey =
-      normalizeText(transaction.customerId) ??
-      `customer:${normalizeCustomerName(customerName) || "tanimsiz"}`;
+    const customerName = resolveTransactionCustomerName(
+      transaction,
+      lines,
+      customersById,
+      rollsById
+    );
+    const customerId = normalizeText(transaction.customerId);
 
     lines.forEach((line) => {
       const patternMeta = patternsById.get(line.patternId);
@@ -156,14 +253,12 @@ export const buildWarehouseSummary = ({
         patternName,
         patternLabel: createPatternLabel(patternCode, patternName),
         colorName: normalizeText(line.color) ?? "Renk belirtilmedi",
-        customerId: normalizeText(transaction.customerId),
+        customerId,
         customerName,
         metres: line.totalMetres,
         tops: line.topCount,
         rollIds: line.rollIds ?? [],
       });
-
-      if (!customerKey) return;
     });
   });
 
@@ -172,10 +267,12 @@ export const buildWarehouseSummary = ({
 
   returnTransactions.forEach((transaction) => {
     const lines = linesByTransactionId.get(transaction.id) ?? [];
-    const customerName =
-      normalizeText(transaction.customerNameSnapshot) ??
-      normalizeText(customersById.get(transaction.customerId ?? "")?.nameOriginal) ??
-      "Musteri belirtilmedi";
+    const customerName = resolveTransactionCustomerName(
+      transaction,
+      lines,
+      customersById,
+      rollsById
+    );
 
     lines.forEach((line) => {
       const patternMeta = patternsById.get(line.patternId);
@@ -275,8 +372,7 @@ export const buildWarehouseSummary = ({
 
   const customerMap = new Map<string, WarehouseCustomerDistributionRow>();
   shipmentEventsInRange.forEach((event) => {
-    const fallbackKey = `customer:${normalizeCustomerName(event.customerName) || "tanimsiz"}`;
-    const customerKey = event.customerId ?? fallbackKey;
+    const customerKey = buildCustomerKey(event.customerName, event.customerId);
     const current = customerMap.get(customerKey) ?? {
       customerKey,
       customerId: event.customerId,
@@ -286,6 +382,8 @@ export const buildWarehouseSummary = ({
       share: 0,
     };
 
+    current.customerId = current.customerId ?? event.customerId;
+    current.customerName = chooseCustomerLabel(current.customerName, event.customerName);
     current.totalMetres += event.metres;
     current.totalTops += event.tops;
     customerMap.set(customerKey, current);
@@ -370,8 +468,7 @@ export const buildWarehouseSummary = ({
   >();
 
   shipmentEventsInRange.forEach((event) => {
-    const fallbackKey = `customer:${normalizeCustomerName(event.customerName) || "tanimsiz"}`;
-    const customerKey = event.customerId ?? fallbackKey;
+    const customerKey = buildCustomerKey(event.customerName, event.customerId);
     const current = customerDetailMap.get(customerKey) ?? {
       customerKey,
       customerId: event.customerId,
@@ -381,6 +478,8 @@ export const buildWarehouseSummary = ({
       patterns: new Map(),
     };
 
+    current.customerId = current.customerId ?? event.customerId;
+    current.customerName = chooseCustomerLabel(current.customerName, event.customerName);
     current.totalMetres += event.metres;
     current.totalTops += event.tops;
 

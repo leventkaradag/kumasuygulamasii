@@ -12,7 +12,7 @@ import type { FabricRoll } from "@/lib/domain/depo";
 import type { PatternImageFields } from "@/lib/patternImage";
 import { Stage } from "@/lib/domain/movement";
 import { buildPatternMetricMap } from "@/lib/patternMetrics";
-import { depoSupabaseRepo } from "@/lib/repos/depoSupabaseRepo";
+import { listAllRollsFromSupabase } from "@/lib/repos/depoSupabaseRepo";
 import { patternsSupabaseRepo } from "@/lib/repos/patternsSupabaseRepo";
 import { cn } from "@/lib/cn";
 import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
@@ -207,7 +207,7 @@ export default function DesenlerPage() {
     let mounted = true;
     Promise.all([
       patternsSupabaseRepo.list(),
-      depoSupabaseRepo.listRolls(),
+      listAllRollsFromSupabase(),
     ]).then(([patternData, rollData]) => {
       if (!mounted) return;
       const sorted = sortPatternsByStage(patternData);
@@ -271,7 +271,7 @@ export default function DesenlerPage() {
   const refreshPatterns = (preferredId?: string, forceResetSelection = false) => {
     Promise.all([
       patternsSupabaseRepo.list(),
-      depoSupabaseRepo.listRolls(),
+      listAllRollsFromSupabase(),
     ]).then(([data, rollData]) => {
       setFetchError(null);
       const refreshed = sortPatternsByStage(data);

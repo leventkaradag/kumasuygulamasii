@@ -134,9 +134,9 @@ export default function SevkRezervBelgeleriPage() {
     setError(null);
     try {
       const [fetchedTx, fetchedLines, fetchedDocs] = await Promise.all([
-        depoTransactionsSupabaseRepo.listTransactions(),
-        depoTransactionsSupabaseRepo.listLines(),
-        weavingSupabaseRepo.listDispatchDocuments(),
+        depoTransactionsSupabaseRepo.listAllTransactions(),
+        depoTransactionsSupabaseRepo.listAllLines(),
+        weavingSupabaseRepo.listDispatchDocumentsInRange(),
       ]);
       setTransactions(fetchedTx);
       setLines(fetchedLines);

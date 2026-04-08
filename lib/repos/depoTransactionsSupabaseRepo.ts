@@ -140,6 +140,13 @@ type CreateTransactionInput = {
   lines: CreateLineInput[];
 };
 
+type ListTransactionsFilters = {
+  from?: string;
+  to?: string;
+};
+
+const TRANSACTIONS_PAGE_SIZE = 1000;
+
 // ─── Repository ───────────────────────────────────────────────────────────────
 
 export const depoTransactionsSupabaseRepo = {
@@ -178,6 +185,64 @@ export const depoTransactionsSupabaseRepo = {
 
     if (error) throw new Error(`depo_transaction_lines.list: ${error.message}`);
     return (data ?? []).map(mapRowToLine);
+  },
+
+  async listAllTransactions(filters: ListTransactionsFilters = {}): Promise<DepoTransaction[]> {
+    const supabase = createClient();
+    const rows: DepoTransactionRow[] = [];
+
+    for (let from = 0; ; from += TRANSACTIONS_PAGE_SIZE) {
+      const to = from + TRANSACTIONS_PAGE_SIZE - 1;
+      let query = supabase
+        .from("depo_transactions")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .range(from, to);
+
+      if (filters.from) query = query.gte("created_at", new Date(filters.from).toISOString());
+      if (filters.to) query = query.lte("created_at", new Date(filters.to).toISOString());
+
+      const { data, error } = await query.returns<DepoTransactionRow[]>();
+
+      if (error) throw new Error(`depo_transactions.listAll: ${error.message}`);
+
+      const chunk = data ?? [];
+      rows.push(...chunk);
+
+      if (chunk.length < TRANSACTIONS_PAGE_SIZE) {
+        break;
+      }
+    }
+
+    return rows.map(mapRowToTransaction);
+  },
+
+  async listAllLines(transactionId?: string): Promise<DepoTransactionLine[]> {
+    const supabase = createClient();
+    const rows: DepoTransactionLineRow[] = [];
+
+    for (let from = 0; ; from += TRANSACTIONS_PAGE_SIZE) {
+      const to = from + TRANSACTIONS_PAGE_SIZE - 1;
+      let query = supabase
+        .from("depo_transaction_lines")
+        .select("*")
+        .range(from, to);
+
+      if (transactionId) query = query.eq("transaction_id", transactionId);
+
+      const { data, error } = await query.returns<DepoTransactionLineRow[]>();
+
+      if (error) throw new Error(`depo_transaction_lines.listAll: ${error.message}`);
+
+      const chunk = data ?? [];
+      rows.push(...chunk);
+
+      if (chunk.length < TRANSACTIONS_PAGE_SIZE) {
+        break;
+      }
+    }
+
+    return rows.map(mapRowToLine);
   },
 
   // ── Get single transaction ─────────────────────────────────────────────────

@@ -30,6 +30,7 @@ export function WarehouseCustomerDistributionPanel({
   const leader = rows[0] ?? null;
   const topFiveShare = rows.slice(0, 5).reduce((sum, row) => sum + row.share, 0);
   const averageMetres = rows.length > 0 ? totalMetres / rows.length : 0;
+  const overflowCustomerCount = Math.max(rows.length - 5, 0);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
@@ -80,7 +81,7 @@ export function WarehouseCustomerDistributionPanel({
 
         <SummarySectionCard
           title="Oncelikli Musteriler"
-          description="Top sevk hacmini tasiyan musteri gruplari."
+          description="Liste filtrelenmis tum musterileri acik isimle gosterir; kucuk musteriler digerleri altina gizlenmez."
           className="min-h-0"
           bodyClassName="min-h-0 overflow-auto"
         >
@@ -98,9 +99,17 @@ export function WarehouseCustomerDistributionPanel({
                 value={`${fmtMetres(totalMetres)} m`}
                 description="Musteri dagilimi sadece aktif sevk kayitlarindan hesaplanir."
               />
+              {overflowCustomerCount > 0 ? (
+                <InsightCard
+                  tone="teal"
+                  title="Tum Musteriler"
+                  value={`${rows.length} kayit`}
+                  description={`${overflowCustomerCount} musteri daha once digerleri altina gidiyordu; artik asagida acik isimle listeleniyor.`}
+                />
+              ) : null}
 
               <div className="space-y-2">
-                {rows.slice(0, 5).map((row) => (
+                {rows.map((row) => (
                   <RankedRow
                     key={row.customerKey}
                     label={row.customerName}

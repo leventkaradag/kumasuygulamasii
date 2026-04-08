@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   Boxes,
@@ -20,11 +20,10 @@ import Layout from "../components/Layout";
 import { useAuthProfile } from "../components/AuthProfileProvider";
 import { cn } from "../lib/cn";
 import { getPatternThumbnailSrc } from "../lib/patternImage";
-import { buildPatternMetricMap } from "../lib/patternMetrics";
-import { depoLocalRepo } from "../lib/repos/depoLocalRepo";
-import { dyehouseLocalRepo } from "../lib/repos/dyehouseLocalRepo";
-import { patternsLocalRepo } from "../lib/repos/patternsLocalRepo";
-import { weavingLocalRepo } from "../lib/repos/weavingLocalRepo";
+import { getWarehouseMetersTotalFromSupabase } from "../lib/repos/depoSupabaseRepo";
+import { depoTransactionsSupabaseRepo } from "../lib/repos/depoTransactionsSupabaseRepo";
+import { patternsSupabaseRepo } from "../lib/repos/patternsSupabaseRepo";
+import { weavingSupabaseRepo } from "../lib/repos/weavingSupabaseRepo";
 
 const stageLabel = {
   DEPO: "Depo",
@@ -34,8 +33,7 @@ const stageLabel = {
 
 const dashboardPanelClass =
   "rounded-[26px] border border-[#e4d8cb] bg-[linear-gradient(180deg,rgba(255,251,246,0.96),rgba(248,241,233,0.94))] p-5 shadow-[0_18px_42px_rgba(63,48,38,0.08),inset_0_1px_0_rgba(255,255,255,0.78)]";
-
-const isPatternDeleted = (pattern) => pattern?.__deleted === true;
+const DASHBOARD_REFRESH_INTERVAL_MS = 60_000;
 
 const isToday = (value) => {
   if (!value) return false;
@@ -77,121 +75,159 @@ const summarizePatterns = (patterns) => {
     .join(" · ");
 };
 
-const createDashboardSnapshot = () => ({
-  patterns: patternsLocalRepo.list(),
-  rolls: depoLocalRepo.listRolls(),
-  jobs: dyehouseLocalRepo.listJobs(),
-  dispatchDocuments: weavingLocalRepo.listDispatchDocuments(),
-  progressEntries: weavingLocalRepo.listProgress(),
-});
+const hasOperationalMeters = (pattern) =>
+  (pattern.totalProducedMeters ?? 0) > 0 ||
+  (pattern.stockMeters ?? 0) > 0 ||
+  (pattern.inDyehouseMeters ?? 0) > 0 ||
+  (pattern.defectMeters ?? 0) > 0;
+
+const isOperationallyActivePattern = (pattern) =>
+  pattern.archived !== true &&
+  (pattern.currentStage !== "DEPO" || hasOperationalMeters(pattern));
+
+const getTodayRange = () => {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(start);
+  end.setHours(23, 59, 59, 999);
+
+  return {
+    from: start.toISOString(),
+    to: end.toISOString(),
+  };
+};
+
+const createDashboardSnapshot = async () => {
+  const { from, to } = getTodayRange();
+  const [patterns, depotMeters, transactions, progressEntries, dispatchDocuments] = await Promise.all([
+    patternsSupabaseRepo.list(),
+    getWarehouseMetersTotalFromSupabase(),
+    depoTransactionsSupabaseRepo.listAllTransactions({ from, to }),
+    weavingSupabaseRepo.listProgressInRange({ from, to }),
+    weavingSupabaseRepo.listDispatchDocumentsInRange({ from, to }),
+  ]);
+
+  const visibleDepoDocumentTypes = new Set([
+    "SHIPMENT",
+    "RESERVATION",
+    "RETURN",
+    "REVERSAL",
+    "ADJUSTMENT",
+  ]);
+
+  return {
+    patterns,
+    depotMeters,
+    todayTransactionCount: transactions.filter((transaction) => visibleDepoDocumentTypes.has(transaction.type))
+      .length,
+    todayProgressMeters: progressEntries.reduce((total, entry) => total + entry.meters, 0),
+    todayDispatchDocumentCount:
+      transactions.filter((transaction) => visibleDepoDocumentTypes.has(transaction.type)).length +
+      dispatchDocuments.length,
+    todayToDyehouseCount: dispatchDocuments.filter(
+      (document) => document.destination === "BOYAHANE"
+    ).length,
+  };
+};
 
 const emptyDashboardSnapshot = () => ({
   patterns: [],
-  rolls: [],
-  jobs: [],
-  dispatchDocuments: [],
-  progressEntries: [],
+  depotMeters: 0,
+  todayTransactionCount: 0,
+  todayProgressMeters: 0,
+  todayDispatchDocumentCount: 0,
+  todayToDyehouseCount: 0,
 });
 
 export default function Dashboard() {
   const { displayName, permissions } = useAuthProfile();
-  const [snapshot, setSnapshot] = useState(emptyDashboardSnapshot);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [snapshot, setSnapshot] = useState(null);
+  const [isLoadingDashboard, setIsLoadingDashboard] = useState(true);
+  const lastLoadedAtRef = useRef(0);
+  const hasSnapshotRef = useRef(false);
+  const [loadError, setLoadError] = useState("");
+  const resolvedSnapshot = snapshot ?? emptyDashboardSnapshot();
 
   useEffect(() => {
-    // Delay slightly to ensure paint happens first, unblocking the main thread
-    const timer = setTimeout(() => {
-      setSnapshot(createDashboardSnapshot());
-      setIsLoaded(true);
-    }, 0);
+    let isMounted = true;
+
+    const load = async (background = false) => {
+      if (!background && !hasSnapshotRef.current) {
+        setIsLoadingDashboard(true);
+      }
+
+      try {
+        const nextSnapshot = await createDashboardSnapshot();
+        if (!isMounted) return;
+        setSnapshot(nextSnapshot);
+        hasSnapshotRef.current = true;
+        setLoadError("");
+        lastLoadedAtRef.current = Date.now();
+      } catch (error) {
+        if (!isMounted) return;
+        setLoadError(
+          error instanceof Error ? error.message : "Kontrol paneli verileri yuklenemedi."
+        );
+      } finally {
+        if (isMounted) {
+          setIsLoadingDashboard(false);
+        }
+      }
+    };
+
+    load(false);
 
     const refresh = () => {
-      setSnapshot(createDashboardSnapshot());
+      if (Date.now() - lastLoadedAtRef.current < DASHBOARD_REFRESH_INTERVAL_MS) return;
+      load(true);
     };
 
     window.addEventListener("focus", refresh);
-    window.addEventListener("storage", refresh);
 
     return () => {
-      clearTimeout(timer);
+      isMounted = false;
       window.removeEventListener("focus", refresh);
-      window.removeEventListener("storage", refresh);
     };
   }, []);
 
   const allPatterns = useMemo(
-    () => snapshot.patterns.filter((pattern) => !isPatternDeleted(pattern)),
-    [snapshot.patterns]
+    () => resolvedSnapshot.patterns,
+    [resolvedSnapshot.patterns]
   );
 
-  const activePatterns = useMemo(
+  const visiblePatterns = useMemo(
     () => allPatterns.filter((pattern) => pattern.archived !== true),
     [allPatterns]
   );
 
-  const patternMetricsMap = useMemo(
-    () => buildPatternMetricMap(allPatterns),
-    [allPatterns]
+  const activePatterns = useMemo(
+    () => visiblePatterns.filter((pattern) => isOperationallyActivePattern(pattern)),
+    [visiblePatterns]
   );
 
-  const openDyehouseJobs = useMemo(
-    () =>
-      snapshot.jobs.filter(
-        (job) => job.status === "RECEIVED" || job.status === "IN_PROCESS"
-      ),
-    [snapshot.jobs]
-  );
-
-  const boyahaneFallbackCount = activePatterns.filter(
+  const boyahanePatternCount = visiblePatterns.filter(
     (pattern) => pattern.currentStage === "BOYAHANE"
   ).length;
 
-  const depotMeters = useMemo(
-    () =>
-      snapshot.rolls
-        .filter(
-          (roll) =>
-            roll.status === "IN_STOCK" ||
-            roll.status === "RESERVED" ||
-            roll.status === "RETURNED"
-        )
-        .reduce((total, roll) => total + roll.meters, 0),
-    [snapshot.rolls]
-  );
+  const depotMeters = resolvedSnapshot.depotMeters;
 
   const todayNewPatterns = useMemo(
-    () => allPatterns.filter((pattern) => isToday(pattern.createdAt)),
-    [allPatterns]
+    () => visiblePatterns.filter((pattern) => isToday(pattern.createdAt)),
+    [visiblePatterns]
   );
 
-  const todayProgressMeters = useMemo(
-    () =>
-      snapshot.progressEntries
-        .filter((entry) => isToday(entry.createdAt))
-        .reduce((total, entry) => total + entry.meters, 0),
-    [snapshot.progressEntries]
-  );
-
-  const todayDispatchDocuments = useMemo(
-    () => snapshot.dispatchDocuments.filter((document) => isToday(document.createdAt)),
-    [snapshot.dispatchDocuments]
-  );
-
-  const todayToDyehouse = useMemo(
-    () =>
-      snapshot.dispatchDocuments.filter(
-        (document) =>
-          isToday(document.createdAt) && document.destination === "BOYAHANE"
-      ),
-    [snapshot.dispatchDocuments]
-  );
+  const todayProgressMeters = resolvedSnapshot.todayProgressMeters;
+  const todayDispatchDocuments = resolvedSnapshot.todayDispatchDocumentCount;
+  const todayToDyehouseCount = resolvedSnapshot.todayToDyehouseCount;
+  const showInitialLoading = isLoadingDashboard && snapshot === null;
 
   const recentPatterns = useMemo(
     () =>
-      [...allPatterns]
+      [...visiblePatterns]
         .sort((a, b) => toTimestamp(b.createdAt) - toTimestamp(a.createdAt))
         .slice(0, 5),
-    [allPatterns]
+    [visiblePatterns]
   );
 
   const missingImagePatterns = useMemo(
@@ -202,24 +238,22 @@ export default function Dashboard() {
   const defectPatterns = useMemo(
     () =>
       activePatterns.filter(
-        (pattern) => (patternMetricsMap.get(pattern.id)?.defectMeters ?? 0) > 0
+        (pattern) => (pattern.defectMeters ?? 0) > 0
       ),
-    [activePatterns, patternMetricsMap]
+    [activePatterns]
   );
 
   const missingMeterPatterns = useMemo(
     () =>
       activePatterns.filter((pattern) => {
-        const metrics = patternMetricsMap.get(pattern.id);
-        if (!metrics) return true;
         return (
-          metrics.totalProducedMeters <= 0 &&
-          metrics.stockMeters <= 0 &&
-          metrics.inDyehouseMeters <= 0 &&
-          metrics.defectMeters <= 0
+          (pattern.totalProducedMeters ?? 0) <= 0 &&
+          (pattern.stockMeters ?? 0) <= 0 &&
+          (pattern.inDyehouseMeters ?? 0) <= 0 &&
+          (pattern.defectMeters ?? 0) <= 0
         );
       }),
-    [activePatterns, patternMetricsMap]
+    [activePatterns]
   );
 
   const reviewPendingPatterns = useMemo(
@@ -235,7 +269,7 @@ export default function Dashboard() {
   const kpis = [
     {
       label: "Toplam Desen",
-      value: fmtCount(allPatterns.length),
+      value: fmtCount(visiblePatterns.length),
       hint: "arsiv haric tum kayitlar",
       icon: Boxes,
     },
@@ -247,8 +281,8 @@ export default function Dashboard() {
     },
     {
       label: "Boyahanede",
-      value: fmtCount(openDyehouseJobs.length || boyahaneFallbackCount),
-      hint: openDyehouseJobs.length > 0 ? "acik boyahane isi" : "boyahane asamasindaki desen",
+      value: fmtCount(boyahanePatternCount),
+      hint: "canli current_stage = BOYAHANE desenleri",
       icon: Factory,
     },
     {
@@ -274,25 +308,25 @@ export default function Dashboard() {
       value: fmtMeters(todayProgressMeters),
       detail:
         todayProgressMeters > 0
-          ? "Dokuma ilerleme kayitlarindan toplandi."
-          : "Bugun dokuma ilerleme girisi gorunmuyor.",
+          ? "Canli dokuma ilerleme kayitlarindan toplandi."
+          : "Bugun canli dokuma ilerleme girisi gorunmuyor.",
       icon: Layers3,
     },
     {
       label: "Olusturulan belge",
-      value: fmtCount(todayDispatchDocuments.length),
+      value: fmtCount(todayDispatchDocuments),
       detail:
-        todayDispatchDocuments.length > 0
-          ? "Sevk ve cikis belgeleri bugun olusturuldu."
+        todayDispatchDocuments > 0
+          ? "Depo islem belgeleri ve dokuma sevk belgeleri bugun olusturuldu."
           : "Bugune ait yeni belge kaydi yok.",
       icon: FileText,
     },
     {
       label: "Boyahaneye gecen is",
-      value: fmtCount(todayToDyehouse.length),
+      value: fmtCount(todayToDyehouseCount),
       detail:
-        todayToDyehouse.length > 0
-          ? "Boyahane hedefli sevk hareketleri algilandi."
+        todayToDyehouseCount > 0
+          ? "Canli boyahane hedefli sevk belgeleri algilandi."
           : "Bugun boyahaneye yeni cikis gorunmuyor.",
       icon: Factory,
     },
@@ -345,7 +379,7 @@ export default function Dashboard() {
       value: fmtCount(defectPatterns.length),
       detail:
         defectPatterns.length > 0
-          ? "Hatali metre ureten kayitlar ayristirilmali."
+          ? "Canli pattern defect_meters alaninda sinyal veren kayitlar gozden gecirilmeli."
           : "Hatali metre sinyali veren kayit yok.",
       icon: TriangleAlert,
       tone: defectPatterns.length > 0 ? "danger" : "calm",
@@ -355,8 +389,8 @@ export default function Dashboard() {
       value: fmtCount(missingMeterPatterns.length),
       detail:
         missingMeterPatterns.length > 0
-          ? "Metrik akisi olmayan desenler gozden gecirilmeli."
-          : "Aktif desenlerin metre bilgisi dolu gorunuyor.",
+          ? "Canli pattern metre alanlari bos kalan aktif desenler gozden gecirilmeli."
+          : "Aktif desenlerin canli metre alanlari dolu gorunuyor.",
       icon: Package,
       tone: "warning",
     },
@@ -380,10 +414,19 @@ export default function Dashboard() {
       <div className="h-full overflow-auto pr-1">
         <div className="space-y-5">
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {kpis.map((item) => (
-              <KpiCard key={item.label} {...item} />
-            ))}
+            {showInitialLoading
+              ? Array.from({ length: 4 }, (_, index) => <KpiCardSkeleton key={index} />)
+              : kpis.map((item) => <KpiCard key={item.label} {...item} />)}
           </div>
+
+          {loadError ? (
+            <section className={dashboardPanelClass}>
+              <EmptyState
+                title="Canli veriler yuklenemedi"
+                description={loadError}
+              />
+            </section>
+          ) : null}
 
           <div className="grid gap-4 xl:grid-cols-[1.2fr,0.8fr]">
             <section className={dashboardPanelClass}>
@@ -393,9 +436,9 @@ export default function Dashboard() {
                 description={`${displayName} icin gunun operasyon ozeti.`}
               />
               <div className="mt-4 space-y-3">
-                {movementRows.map((row) => (
-                  <MovementRow key={row.label} {...row} />
-                ))}
+                {showInitialLoading
+                  ? Array.from({ length: 4 }, (_, index) => <MovementRowSkeleton key={index} />)
+                  : movementRows.map((row) => <MovementRow key={row.label} {...row} />)}
               </div>
             </section>
 
@@ -421,7 +464,9 @@ export default function Dashboard() {
                 description="Olusan en yeni desenleri kisa bir satirda izleyin."
               />
               <div className="mt-4 space-y-3">
-                {recentPatterns.length > 0 ? (
+                {showInitialLoading ? (
+                  Array.from({ length: 5 }, (_, index) => <MovementRowSkeleton key={index} />)
+                ) : recentPatterns.length > 0 ? (
                   recentPatterns.map((pattern) => (
                     <RecentPatternRow key={pattern.id} pattern={pattern} />
                   ))
@@ -441,9 +486,9 @@ export default function Dashboard() {
                 description="Eksik veri ve kontrol isteyen kayitlari tek bakista ayiklayin."
               />
               <div className="mt-4 space-y-3">
-                {attentionRows.map((row) => (
-                  <AttentionRow key={row.label} {...row} />
-                ))}
+                {showInitialLoading
+                  ? Array.from({ length: 4 }, (_, index) => <AttentionRowSkeleton key={index} />)
+                  : attentionRows.map((row) => <AttentionRow key={row.label} {...row} />)}
               </div>
             </section>
           </div>
@@ -468,6 +513,23 @@ function KpiCard({ label, value, hint, icon: Icon }) {
         </div>
         <span className="flex h-11 w-11 items-center justify-center rounded-2xl border border-[#e0d1c4] bg-white/80 text-[#6f594a] shadow-[0_8px_16px_rgba(63,48,38,0.08)]">
           <Icon className="h-5 w-5" />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function KpiCardSkeleton() {
+  return (
+    <div className="rounded-[24px] border border-[#e2d7cb] bg-[linear-gradient(180deg,rgba(255,252,248,0.98),rgba(247,239,231,0.96))] p-4 shadow-[0_16px_36px_rgba(63,48,38,0.08),inset_0_1px_0_rgba(255,255,255,0.8)]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="w-full space-y-3">
+          <div className="h-3 w-24 animate-pulse rounded-full bg-[#e6d8ca]" />
+          <div className="h-8 w-32 animate-pulse rounded-full bg-[#ddcfc1]" />
+          <div className="h-3 w-28 animate-pulse rounded-full bg-[#efe4d9]" />
+        </div>
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#e0d1c4] bg-white/80 shadow-[0_8px_16px_rgba(63,48,38,0.08)]">
+          <div className="h-5 w-5 animate-pulse rounded-full bg-[#dccbbb]" />
         </span>
       </div>
     </div>
@@ -499,6 +561,21 @@ function MovementRow({ label, value, detail, icon: Icon }) {
       <div className="shrink-0 text-right">
         <div className="text-base font-semibold text-[#2f241d]">{value}</div>
       </div>
+    </div>
+  );
+}
+
+function MovementRowSkeleton() {
+  return (
+    <div className="flex items-center gap-3 rounded-2xl border border-[#e3d7cb] bg-white/72 px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.78)]">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[#f4ebe2]">
+        <div className="h-4 w-4 animate-pulse rounded-full bg-[#d9c6b5]" />
+      </span>
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="h-3 w-32 animate-pulse rounded-full bg-[#dfd1c2]" />
+        <div className="h-3 w-40 animate-pulse rounded-full bg-[#efe5dc]" />
+      </div>
+      <div className="h-4 w-14 animate-pulse rounded-full bg-[#ddcfc1]" />
     </div>
   );
 }
@@ -594,6 +671,23 @@ function AttentionRow({ label, value, detail, icon: Icon, tone }) {
             <div className="shrink-0 text-sm font-semibold text-[#2f241d]">{value}</div>
           </div>
           <div className="mt-1 text-xs leading-5 text-[#7f6c5d]">{detail}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AttentionRowSkeleton() {
+  return (
+    <div className="rounded-2xl border border-[#e3d7cb] bg-white/72 px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.76)]">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-[#f4ebe2]">
+          <div className="h-4 w-4 animate-pulse rounded-full bg-[#d9c6b5]" />
+        </span>
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="h-3 w-36 animate-pulse rounded-full bg-[#dfd1c2]" />
+          <div className="h-3 w-28 animate-pulse rounded-full bg-[#ddcfc1]" />
+          <div className="h-3 w-48 animate-pulse rounded-full bg-[#efe5dc]" />
         </div>
       </div>
     </div>

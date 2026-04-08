@@ -22,6 +22,7 @@ type FabricRollRow = {
 };
 
 type PatternMeterSyncRow = Pick<FabricRollRow, "pattern_id" | "meters" | "status">;
+type RollMetersRow = Pick<FabricRollRow, "meters">;
 
 // ─── Mappers ──────────────────────────────────────────────────────────────────
 
@@ -109,6 +110,7 @@ const STOCK_METER_STATUSES = new Set<FabricRollStatus>([
   "RESERVED",
   "RETURNED",
 ]);
+const WAREHOUSE_METER_STATUSES: FabricRollStatus[] = ["IN_STOCK", "RESERVED", "RETURNED"];
 
 const DEFECT_METER_STATUSES = new Set<FabricRollStatus>(["SCRAP"]);
 
@@ -487,6 +489,37 @@ export async function listAllRollsFromSupabase(
   }
 
   return rolls;
+}
+
+export async function getWarehouseMetersTotalFromSupabase(): Promise<number> {
+  const supabase = createClient();
+  let totalMeters = 0;
+
+  for (let from = 0; ; from += LIST_ROLLS_PAGE_SIZE) {
+    const to = from + LIST_ROLLS_PAGE_SIZE - 1;
+    const { data, error } = await supabase
+      .from("fabric_rolls")
+      .select("meters")
+      .in("status", WAREHOUSE_METER_STATUSES)
+      .range(from, to)
+      .returns<RollMetersRow[]>();
+
+    if (error) throw new Error(`fabric_rolls.listWarehouseMeters: ${error.message}`);
+
+    const chunk = data ?? [];
+    chunk.forEach((row) => {
+      const meters = Number(row.meters);
+      if (Number.isFinite(meters) && meters > 0) {
+        totalMeters += meters;
+      }
+    });
+
+    if (chunk.length < LIST_ROLLS_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  return totalMeters;
 }
 
 // ─── Repository ───────────────────────────────────────────────────────────────

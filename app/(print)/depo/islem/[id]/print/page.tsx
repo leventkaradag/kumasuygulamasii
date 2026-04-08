@@ -50,7 +50,7 @@ export default function DepoTransactionPrintPage() {
 
     Promise.all([
       depoTransactionsSupabaseRepo.getTransaction(id),
-      depoTransactionsSupabaseRepo.listLines(id),
+      depoTransactionsSupabaseRepo.listAllLines(id),
     ])
       .then(([fetchedTx, fetchedLines]) => {
         if (!isMounted) return;

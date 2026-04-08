@@ -26,7 +26,6 @@ import type {
 } from "@/lib/domain/weaving";
 import { dyehouseLocalRepo } from "@/lib/repos/dyehouseLocalRepo";
 import { patternsSupabaseRepo } from "@/lib/repos/patternsSupabaseRepo";
-import { weavingLocalRepo } from "@/lib/repos/weavingLocalRepo";
 import { weavingSupabaseRepo } from "@/lib/repos/weavingSupabaseRepo";
 import { useModalFocusTrap } from "@/lib/useModalFocusTrap";
 import {
@@ -493,7 +492,7 @@ export default function Dokuma() {
   const { permissions } = useAuthProfile();
   const [plans, setPlans] = useState<WeavingPlan[]>([]);
   const [progressEntries, setProgressEntries] = useState<WeavingProgressEntry[]>([]);
-  const [transferEntries, setTransferEntries] = useState<WeavingTransfer[]>(() => weavingLocalRepo.listTransfers());
+  const [transferEntries, setTransferEntries] = useState<WeavingTransfer[]>([]);
   const [patterns, setPatterns] = useState<Pattern[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -554,10 +553,10 @@ export default function Dokuma() {
       setIsLoading(true);
       setError(null);
       const [fetchedPlans, fetchedProgress, fetchedPatterns, activeTransfers] = await Promise.all([
-        weavingSupabaseRepo.listPlans(),
-        weavingSupabaseRepo.listProgress(),
+        weavingSupabaseRepo.listAllPlans(),
+        weavingSupabaseRepo.listProgressInRange(),
         patternsSupabaseRepo.list(),
-        weavingSupabaseRepo.listTransfers()
+        weavingSupabaseRepo.listAllTransfers()
       ]);
 
       // Recalculate variant metrics dynamically (Hybrid: Supabase + Local Transfers)

@@ -54,6 +54,8 @@ type PatternRow = {
   archived: boolean | null;
 };
 
+const PATTERNS_PAGE_SIZE = 1000;
+
 // ─── Mappers ─────────────────────────────────────────────────────────────────
 
 function mapDbToPattern(row: PatternRow): Pattern {
@@ -177,13 +179,28 @@ export const patternsSupabaseRepo = {
   /** List all patterns (active + archived) */
   async list(): Promise<Pattern[]> {
     const supabase = createClient();
-    const { data, error } = await supabase
-      .from("patterns")
-      .select("*")
-      .order("created_at", { ascending: true });
+    const rows: PatternRow[] = [];
 
-    if (error) throw new Error(`patterns.list: ${error.message}`);
-    return (data as PatternRow[]).map(mapDbToPattern);
+    for (let from = 0; ; from += PATTERNS_PAGE_SIZE) {
+      const to = from + PATTERNS_PAGE_SIZE - 1;
+      const { data, error } = await supabase
+        .from("patterns")
+        .select("*")
+        .order("created_at", { ascending: true })
+        .range(from, to)
+        .returns<PatternRow[]>();
+
+      if (error) throw new Error(`patterns.list: ${error.message}`);
+
+      const chunk = data ?? [];
+      rows.push(...chunk);
+
+      if (chunk.length < PATTERNS_PAGE_SIZE) {
+        break;
+      }
+    }
+
+    return rows.map(mapDbToPattern);
   },
 
   /** Get single pattern by ID */

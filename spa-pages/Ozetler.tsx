@@ -10,7 +10,7 @@ import type { FabricRoll } from "@/lib/domain/depo";
 import type { Pattern } from "@/lib/domain/pattern";
 import type { DepoTransaction, DepoTransactionLine } from "@/lib/domain/depoTransaction";
 import { customersLocalRepo } from "@/lib/repos/customersLocalRepo";
-import { depoSupabaseRepo } from "@/lib/repos/depoSupabaseRepo";
+import { listAllRollsFromSupabase } from "@/lib/repos/depoSupabaseRepo";
 import { depoTransactionsSupabaseRepo } from "@/lib/repos/depoTransactionsSupabaseRepo";
 import { patternsSupabaseRepo } from "@/lib/repos/patternsSupabaseRepo";
 import type {
@@ -156,14 +156,12 @@ export default function OzetlerPage() {
 
   useEffect(() => {
     let isMounted = true;
-    setIsLoading(true);
-    setError(null);
 
     Promise.all([
       patternsSupabaseRepo.list(),
-      depoSupabaseRepo.listRolls(),
-      depoTransactionsSupabaseRepo.listTransactions(),
-      depoTransactionsSupabaseRepo.listLines()
+      listAllRollsFromSupabase(),
+      depoTransactionsSupabaseRepo.listAllTransactions(),
+      depoTransactionsSupabaseRepo.listAllLines()
     ])
       .then(([fetchedPatterns, fetchedRolls, fetchedTransactions, fetchedLines]) => {
         if (!isMounted) return;

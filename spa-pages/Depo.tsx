@@ -601,8 +601,8 @@ export default function DepoPage() {
     setTxError(null);
     try {
       const [fetchedTx, fetchedLines] = await Promise.all([
-        depoTransactionsSupabaseRepo.listTransactions(),
-        depoTransactionsSupabaseRepo.listLines(),
+        depoTransactionsSupabaseRepo.listAllTransactions(),
+        depoTransactionsSupabaseRepo.listAllLines(),
       ]);
       setTransactions(fetchedTx);
       setTransactionLines(fetchedLines);

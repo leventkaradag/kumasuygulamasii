@@ -34,71 +34,79 @@ const createId = () => {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 };
 
+type DateRangeFilters = {
+  from?: string;
+  to?: string;
+};
+
+const WEAVING_PAGE_SIZE = 1000;
+type DbRecord = Record<string, unknown>;
+
 // Database mappers
 
-const mapPlanFromDb = (row: any): WeavingPlan => {
+const mapPlanFromDb = (row: DbRecord): WeavingPlan => {
   return {
-    id: row.id,
-    patternId: row.pattern_id,
-    patternNoSnapshot: row.pattern_no_snapshot || "",
-    patternNameSnapshot: row.pattern_name_snapshot || "",
+    id: row.id as string,
+    patternId: row.pattern_id as string,
+    patternNoSnapshot: (row.pattern_no_snapshot as string) || "",
+    patternNameSnapshot: (row.pattern_name_snapshot as string) || "",
     plannedMeters: Number(row.planned_meters),
     hamKumasEniCm: row.ham_kumas_eni_cm ? Number(row.ham_kumas_eni_cm) : null,
     tarakEniCm: row.tarak_eni_cm ? Number(row.tarak_eni_cm) : null,
     variants: safeParseArray<WeavingPlanVariant>(row.variants),
-    createdAt: row.created_at,
+    createdAt: row.created_at as string,
     status: row.status as WeavingPlanStatus,
-    manualCompletedAt: row.manual_completed_at,
-    note: row.note,
+    manualCompletedAt: row.manual_completed_at as string | null | undefined,
+    note: row.note as string | undefined,
   };
 };
 
-const mapProgressFromDb = (row: any): WeavingProgressEntry => {
+const mapProgressFromDb = (row: DbRecord): WeavingProgressEntry => {
   return {
-    id: row.id,
-    planId: row.plan_id,
-    createdAt: row.created_at,
+    id: row.id as string,
+    planId: row.plan_id as string,
+    createdAt: row.created_at as string,
     meters: Number(row.meters),
     metersPerUnit: row.meters_per_unit ? Number(row.meters_per_unit) : undefined,
     unitCount: row.unit_count ? Number(row.unit_count) : undefined,
-    variantId: row.variant_id || undefined,
-    note: row.note || undefined,
+    variantId: (row.variant_id as string | null) || undefined,
+    note: (row.note as string | null) || undefined,
   };
 };
 
-const mapTransferFromDb = (row: any): WeavingTransfer => {
+const mapTransferFromDb = (row: DbRecord): WeavingTransfer => {
   return {
-    id: row.id,
-    planId: row.plan_id,
-    createdAt: row.created_at,
+    id: row.id as string,
+    planId: row.plan_id as string,
+    createdAt: row.created_at as string,
     meters: Number(row.meters),
     variantLines: safeParseArray<WeavingTransferVariantLine>(row.variant_lines),
-    destination: row.destination,
-    dyehouseId: row.dyehouse_id || null,
-    dyehouseNameSnapshot: row.dyehouse_name_snapshot || null,
-    note: row.note || undefined,
+    destination: row.destination as WeavingTransfer["destination"],
+    dyehouseId: (row.dyehouse_id as string | null) || null,
+    dyehouseNameSnapshot: (row.dyehouse_name_snapshot as string | null) || null,
+    note: (row.note as string | null) || undefined,
   };
 };
 
-const mapDispatchDocumentFromDb = (row: any): WeavingDispatchDocument => {
+const mapDispatchDocumentFromDb = (row: DbRecord): WeavingDispatchDocument => {
   return {
-    id: row.id,
-    type: row.type,
-    createdAt: row.created_at,
-    destination: row.destination,
-    docNo: row.doc_no,
-    transferId: row.transfer_id || null,
-    sourceJobId: row.source_job_id || null,
-    sourceDispatchDocId: row.source_dispatch_doc_id || null,
-    planId: row.plan_id,
-    patternId: row.pattern_id,
-    patternNoSnapshot: row.pattern_no_snapshot,
-    patternNameSnapshot: row.pattern_name_snapshot,
-    destinationNameSnapshot: row.destination_name_snapshot,
-    dyehouseId: row.dyehouse_id || null,
+    id: row.id as string,
+    type: row.type as WeavingDispatchDocument["type"],
+    createdAt: row.created_at as string,
+    destination: row.destination as WeavingDispatchDocument["destination"],
+    docNo: row.doc_no as string,
+    transferId: (row.transfer_id as string | null) || null,
+    sourceJobId: (row.source_job_id as string | null) || null,
+    sourceDispatchDocId: (row.source_dispatch_doc_id as string | null) || null,
+    planId: row.plan_id as string,
+    patternId: row.pattern_id as string,
+    patternNoSnapshot: row.pattern_no_snapshot as string,
+    patternNameSnapshot: row.pattern_name_snapshot as string,
+    destinationNameSnapshot: row.destination_name_snapshot as string,
+    dyehouseId: (row.dyehouse_id as string | null) || null,
     variantLines: safeParseArray<WeavingDispatchDocumentVariantLine>(row.variant_lines),
     metersTotal: Number(row.meters_total),
-    note: row.note || undefined,
+    note: (row.note as string | null) || undefined,
   };
 };
 
@@ -116,6 +124,34 @@ export const weavingSupabaseRepo = {
     }
 
     return (data || []).map(mapPlanFromDb);
+  },
+
+  async listAllPlans(): Promise<WeavingPlan[]> {
+    const supabase = createClient();
+    const rows: DbRecord[] = [];
+
+    for (let from = 0; ; from += WEAVING_PAGE_SIZE) {
+      const to = from + WEAVING_PAGE_SIZE - 1;
+      const { data, error } = await supabase
+        .from("weaving_plans")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .range(from, to);
+
+      if (error) {
+        console.error("List all plans error:", error);
+        throw new Error("Dokuma planlari yuklenemedi: " + error.message);
+      }
+
+      const chunk = data || [];
+      rows.push(...chunk);
+
+      if (chunk.length < WEAVING_PAGE_SIZE) {
+        break;
+      }
+    }
+
+    return rows.map(mapPlanFromDb);
   },
 
   async getPlan(id: string): Promise<WeavingPlan | null> {
@@ -194,7 +230,7 @@ export const weavingSupabaseRepo = {
   ): Promise<WeavingPlan> {
     const supabase = createClient();
 
-    const rowUpdates: any = {};
+    const rowUpdates: Record<string, unknown> = {};
     if (updates.plannedMeters !== undefined) rowUpdates.planned_meters = updates.plannedMeters;
     if (updates.hamKumasEniCm !== undefined) rowUpdates.ham_kumas_eni_cm = updates.hamKumasEniCm;
     if (updates.tarakEniCm !== undefined) rowUpdates.tarak_eni_cm = updates.tarakEniCm;
@@ -288,6 +324,39 @@ export const weavingSupabaseRepo = {
     return (data || []).map(mapProgressFromDb);
   },
 
+  async listProgressInRange(filters: DateRangeFilters = {}): Promise<WeavingProgressEntry[]> {
+    const supabase = createClient();
+    const rows: DbRecord[] = [];
+
+    for (let from = 0; ; from += WEAVING_PAGE_SIZE) {
+      const to = from + WEAVING_PAGE_SIZE - 1;
+      let query = supabase
+        .from("weaving_progress")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .range(from, to);
+
+      if (filters.from) query = query.gte("created_at", new Date(filters.from).toISOString());
+      if (filters.to) query = query.lte("created_at", new Date(filters.to).toISOString());
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error("List progress range error:", error);
+        throw new Error("Dokuma gerÃ§ekleÅŸmeleri yÃ¼klenemedi: " + error.message);
+      }
+
+      const chunk = data || [];
+      rows.push(...chunk);
+
+      if (chunk.length < WEAVING_PAGE_SIZE) {
+        break;
+      }
+    }
+
+    return rows.map(mapProgressFromDb);
+  },
+
   async addProgress(input: {
     planId: string;
     meters: number;
@@ -350,6 +419,34 @@ export const weavingSupabaseRepo = {
     }
 
     return (data || []).map(mapTransferFromDb);
+  },
+
+  async listAllTransfers(): Promise<WeavingTransfer[]> {
+    const supabase = createClient();
+    const rows: DbRecord[] = [];
+
+    for (let from = 0; ; from += WEAVING_PAGE_SIZE) {
+      const to = from + WEAVING_PAGE_SIZE - 1;
+      const { data, error } = await supabase
+        .from("weaving_transfers")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .range(from, to);
+
+      if (error) {
+        console.error("List all transfers error:", error);
+        throw new Error("Sevk bilgileri yuklenemedi: " + error.message);
+      }
+
+      const chunk = data || [];
+      rows.push(...chunk);
+
+      if (chunk.length < WEAVING_PAGE_SIZE) {
+        break;
+      }
+    }
+
+    return rows.map(mapTransferFromDb);
   },
 
   async addTransfer(input: {
@@ -512,6 +609,42 @@ export const weavingSupabaseRepo = {
     }
 
     return (data || []).map(mapDispatchDocumentFromDb);
+  },
+
+  async listDispatchDocumentsInRange(
+    filters: DateRangeFilters & { destination?: "BOYAHANE" | "DEPO" } = {}
+  ): Promise<WeavingDispatchDocument[]> {
+    const supabase = createClient();
+    const rows: DbRecord[] = [];
+
+    for (let from = 0; ; from += WEAVING_PAGE_SIZE) {
+      const to = from + WEAVING_PAGE_SIZE - 1;
+      let query = supabase
+        .from("weaving_dispatch_documents")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .range(from, to);
+
+      if (filters.from) query = query.gte("created_at", new Date(filters.from).toISOString());
+      if (filters.to) query = query.lte("created_at", new Date(filters.to).toISOString());
+      if (filters.destination) query = query.eq("destination", filters.destination);
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error("List dispatch documents range error:", error);
+        throw new Error("Sevk belgeleri yÃ¼klenemedi: " + error.message);
+      }
+
+      const chunk = data || [];
+      rows.push(...chunk);
+
+      if (chunk.length < WEAVING_PAGE_SIZE) {
+        break;
+      }
+    }
+
+    return rows.map(mapDispatchDocumentFromDb);
   },
 
   async getDispatchDocument(id: string): Promise<WeavingDispatchDocument | null> {
