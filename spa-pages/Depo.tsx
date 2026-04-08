@@ -565,6 +565,7 @@ export default function DepoPage() {
   const [bulkNote, setBulkNote] = useState("");
   const [bulkError, setBulkError] = useState("");
   const [bulkWarning, setBulkWarning] = useState("");
+  const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
 
   const [historyCustomerQuery, setHistoryCustomerQuery] = useState("");
   const [historyFeedback, setHistoryFeedback] = useState("");
@@ -666,6 +667,13 @@ export default function DepoPage() {
       refreshWeavingData();
     }
   }, [refreshData, refreshTxData, refreshWeavingData]);
+
+  const refreshAfterBulkAction = useCallback(async (preferredPatternId?: string | null): Promise<void> => {
+    await refreshData(preferredPatternId);
+    if (txLoadedRef.current) {
+      await refreshTxData();
+    }
+  }, [refreshData, refreshTxData]);
 
   useEffect(() => {
     refreshData();
@@ -1606,6 +1614,7 @@ export default function DepoPage() {
 
   const handleBulkActionConfirm = async () => {
     if (!bulkActionType) return;
+    if (isBulkSubmitting) return;
     if ((bulkActionType === "SHIPMENT" && !canCreateShipment) || (bulkActionType === "RESERVATION" && !canCreateReservation)) {
       return;
     }
@@ -1615,6 +1624,8 @@ export default function DepoPage() {
     }
 
     try {
+      setIsBulkSubmitting(true);
+      setBulkError("");
       const customerInput = bulkCustomerInput.trim();
       if (!customerInput) throw new Error("Musteri secimi zorunlu.");
 
@@ -1623,78 +1634,39 @@ export default function DepoPage() {
       if (!customer) customer = customersLocalRepo.ensureByName(customerInput);
 
       const createdAt = new Date().toISOString();
-      const lineInputs: Array<Omit<DepoTransactionLine, "id" | "transactionId">> = [];
-      let failedRollCount = 0;
-      const failedItemLabels: string[] = [];
-
-      for (const lineDraft of basketItems) {
-        const successRollIds: string[] = [];
-
-        const rollResults = await Promise.all(
-          lineDraft.rollIds.map((rollId) =>
-            bulkActionType === "SHIPMENT"
-              ? depoSupabaseRepo.shipRoll(rollId, customer!.nameOriginal, createdAt)
-              : depoSupabaseRepo.reserveRoll(rollId, customer!.nameOriginal, createdAt)
-          )
-        );
-
-        rollResults.forEach((updated, idx) => {
-          if (updated) successRollIds.push(lineDraft.rollIds[idx]);
-          else failedRollCount += 1;
-        });
-
-        if (successRollIds.length > 0) {
-          lineInputs.push({
-            patternId: lineDraft.patternId,
-            patternNoSnapshot: lineDraft.patternNoSnapshot,
-            patternNameSnapshot: lineDraft.patternNameSnapshot,
-            color: lineDraft.color,
-            metrePerTop: lineDraft.metrePerTop,
-            topCount: successRollIds.length,
-            totalMetres: successRollIds.length * lineDraft.metrePerTop,
-            rollIds: successRollIds,
-          });
-        } else {
-          failedItemLabels.push(
-            `${lineDraft.patternNoSnapshot} - ${lineDraft.patternNameSnapshot}`
-          );
-        }
-      }
-
-      if (lineInputs.length === 0) {
-        const failedInfo =
-          failedItemLabels.length > 0
-            ? ` Basarisiz kalem(ler): ${Array.from(new Set(failedItemLabels)).join(", ")}.`
-            : "";
-        throw new Error(
-          `Islem uygulanamadi. Secili toplar guncellenemedi.${failedInfo} Yenileyip tekrar deneyin.`
-        );
-      }
-
-      await depoTransactionsSupabaseRepo.createTransaction({
-        type: bulkActionType,
+      const payload = {
         createdAt,
         customerId: customer.id,
         customerNameSnapshot: customer.nameOriginal,
         note: bulkNote.trim() || undefined,
-        lines: lineInputs,
-      });
+        lines: basketItems.map((lineDraft) => ({
+          patternId: lineDraft.patternId,
+          patternNoSnapshot: lineDraft.patternNoSnapshot,
+          patternNameSnapshot: lineDraft.patternNameSnapshot,
+          color: lineDraft.color,
+          metrePerTop: lineDraft.metrePerTop,
+          topCount: lineDraft.topCount,
+          totalMetres: lineDraft.totalMetres,
+          rollIds: [...lineDraft.rollIds],
+        })),
+      };
 
-      if (failedRollCount > 0) {
-        const failedInfo =
-          failedItemLabels.length > 0
-            ? ` Kalem: ${Array.from(new Set(failedItemLabels)).join(", ")}.`
-            : "";
-        setBulkWarning(`${failedRollCount} top isleme alinamadi.${failedInfo} Yenileyip tekrar deneyin.`);
+      if (bulkActionType === "SHIPMENT") {
+        await depoSupabaseRepo.applyBulkShipment(payload);
+      } else {
+        await depoSupabaseRepo.applyBulkReservation(payload);
       }
-      else setBulkWarning("");
+
+      setBulkWarning("");
 
       setBasketItems([]);
       setSelectedByRowKey({});
       closeBulkModal();
-      refreshAll(selectedPattern?.id ?? null);
+      await refreshAfterBulkAction(selectedPattern?.id ?? null);
     } catch (error) {
       setBulkError(error instanceof Error ? error.message : "Toplu islem basarisiz");
+    } finally {
+      setIsBulkSubmitting(false);
     }
   };
 
@@ -2899,7 +2871,7 @@ export default function DepoPage() {
       {bulkActionType ? (
         <Modal
           title={bulkActionType === "SHIPMENT" ? "Toplu Sevk Et" : "Toplu Rezerv Yap"}
-          onClose={closeBulkModal}
+          onClose={isBulkSubmitting ? () => undefined : closeBulkModal}
           size="lg"
         >
           <div className="space-y-3">
@@ -2971,8 +2943,8 @@ export default function DepoPage() {
           </div>
           {bulkError ? <p className="mt-3 text-sm text-rose-600">{bulkError}</p> : null}
           <div className="mt-4 flex justify-end gap-2">
-            <button type="button" onClick={closeBulkModal} className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100">Iptal</button>
-            {canUseBasket ? <button type="button" onClick={handleBulkActionConfirm} className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95">Onayla</button> : null}
+            <button type="button" onClick={closeBulkModal} disabled={isBulkSubmitting} className="rounded-lg px-3 py-2 text-sm text-neutral-600 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50">Iptal</button>
+            {canUseBasket ? <button type="button" onClick={handleBulkActionConfirm} disabled={isBulkSubmitting} className="rounded-lg bg-coffee-primary px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95 disabled:cursor-wait disabled:opacity-60">{isBulkSubmitting ? "Gonderiliyor..." : "Onayla"}</button> : null}
           </div>
         </Modal>
       ) : null}

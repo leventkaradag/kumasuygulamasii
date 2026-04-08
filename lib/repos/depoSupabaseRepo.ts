@@ -1,5 +1,7 @@
 import { createClient } from "@/lib/supabase/client";
 import type { FabricRoll, FabricRollStatus } from "@/lib/domain/depo";
+import type { DepoTransaction, DepoTransactionLine } from "@/lib/domain/depoTransaction";
+import { depoTransactionsSupabaseRepo } from "@/lib/repos/depoTransactionsSupabaseRepo";
 
 // ─── DB row type (snake_case) ─────────────────────────────────────────────────
 
@@ -232,7 +234,207 @@ export type RollFilters = {
   q?: string;
 };
 
+type BulkTransactionType = "SHIPMENT" | "RESERVATION";
+
+type BulkTransactionLineInput = Omit<DepoTransactionLine, "id" | "transactionId">;
+
+type ApplyBulkTransactionInput = {
+  createdAt?: string;
+  customerId: string;
+  customerNameSnapshot: string;
+  note?: string;
+  lines: BulkTransactionLineInput[];
+};
+
+type ApplyBulkTransactionResult = {
+  transaction: DepoTransaction;
+  updatedRolls: FabricRoll[];
+};
+
 const LIST_ROLLS_PAGE_SIZE = 1000;
+
+const restoreRollRows = async (
+  supabase: ReturnType<typeof createClient>,
+  rows: FabricRollRow[]
+): Promise<void> => {
+  if (rows.length === 0) return;
+
+  const { error } = await supabase
+    .from("fabric_rolls")
+    .upsert(rows, { onConflict: "id" });
+
+  if (error) {
+    throw new Error(`fabric_rolls.restore: ${error.message}`);
+  }
+};
+
+const normalizeBulkTransactionLines = (lines: BulkTransactionLineInput[]) => {
+  if (!lines.length) {
+    throw new Error("En az bir satir secilmelidir.");
+  }
+
+  const usedRollIds = new Set<string>();
+  const normalizedLines = lines.map((line, index) => {
+    const label = `Satir ${index + 1}`;
+    const patternId = normalizeText(line.patternId);
+    const patternNoSnapshot = normalizeText(line.patternNoSnapshot);
+    const patternNameSnapshot = normalizeText(line.patternNameSnapshot);
+    const color = normalizeText(line.color);
+
+    if (!patternId || !patternNoSnapshot || !patternNameSnapshot || !color) {
+      throw new Error(`${label} eksik desen bilgisi iceriyor.`);
+    }
+    if (!Number.isFinite(line.metrePerTop) || line.metrePerTop <= 0) {
+      throw new Error(`${label} gecersiz metre bilgisi iceriyor.`);
+    }
+
+    const rollIds = Array.isArray(line.rollIds)
+      ? Array.from(new Set(line.rollIds.map((rollId) => rollId.trim()).filter(Boolean)))
+      : [];
+
+    if (rollIds.length === 0) {
+      throw new Error(`${label} icin secili top bulunamadi.`);
+    }
+
+    rollIds.forEach((rollId) => {
+      if (usedRollIds.has(rollId)) {
+        throw new Error("Ayni top birden fazla satira eklendi. Sepeti yenileyip tekrar deneyin.");
+      }
+      usedRollIds.add(rollId);
+    });
+
+    const topCount = rollIds.length;
+
+    return {
+      patternId,
+      patternNoSnapshot,
+      patternNameSnapshot,
+      color,
+      metrePerTop: line.metrePerTop,
+      topCount,
+      totalMetres: topCount * line.metrePerTop,
+      rollIds,
+    };
+  });
+
+  return {
+    lines: normalizedLines,
+    rollIds: normalizedLines.flatMap((line) => line.rollIds ?? []),
+  };
+};
+
+const applyBulkTransaction = async (
+  type: BulkTransactionType,
+  input: ApplyBulkTransactionInput
+): Promise<ApplyBulkTransactionResult> => {
+  const createdAt = toIsoDate(input.createdAt ?? new Date().toISOString(), "createdAt");
+  const customerId = normalizeText(input.customerId);
+  const customerNameSnapshot = normalizeText(input.customerNameSnapshot);
+
+  if (!customerId || !customerNameSnapshot) {
+    throw new Error("Musteri bilgisi eksik.");
+  }
+
+  const normalized = normalizeBulkTransactionLines(input.lines);
+  const supabase = createClient();
+
+  const { data: existingRows, error: fetchError } = await supabase
+    .from("fabric_rolls")
+    .select("*")
+    .in("id", normalized.rollIds)
+    .returns<FabricRollRow[]>();
+
+  if (fetchError) {
+    throw new Error(`fabric_rolls.bulkFetch: ${fetchError.message}`);
+  }
+
+  const fetchedRows = existingRows ?? [];
+  if (fetchedRows.length !== normalized.rollIds.length) {
+    throw new Error("Secili toplarin bir kismi bulunamadi. Listeyi yenileyip tekrar deneyin.");
+  }
+
+  const allowedStatuses =
+    type === "SHIPMENT"
+      ? new Set<FabricRollStatus>(["IN_STOCK", "RESERVED"])
+      : new Set<FabricRollStatus>(["IN_STOCK"]);
+
+  const invalidRolls = fetchedRows.filter((row) => !allowedStatuses.has(mapRowToRoll(row).status));
+  if (invalidRolls.length > 0) {
+    throw new Error("Secilen toplarin durumu degismis. Listeyi yenileyip tekrar deneyin.");
+  }
+
+  const updatePatch =
+    type === "SHIPMENT"
+      ? {
+          status: "SHIPPED",
+          out_at: createdAt,
+          counterparty: customerNameSnapshot,
+          reserved_at: null,
+          reserved_for: null,
+        }
+      : {
+          status: "RESERVED",
+          reserved_at: createdAt,
+          reserved_for: customerNameSnapshot,
+          out_at: null,
+          counterparty: null,
+        };
+
+  const { data: updatedRows, error: updateError } = await supabase
+    .from("fabric_rolls")
+    .update(updatePatch)
+    .in("id", normalized.rollIds)
+    .in("status", Array.from(allowedStatuses))
+    .select("*")
+    .returns<FabricRollRow[]>();
+
+  if (updateError) {
+    throw new Error(`fabric_rolls.bulkUpdate: ${updateError.message}`);
+  }
+
+  const changedRows = updatedRows ?? [];
+  const affectedPatternIds = Array.from(new Set(fetchedRows.map((row) => row.pattern_id)));
+
+  if (changedRows.length !== normalized.rollIds.length) {
+    await restoreRollRows(supabase, fetchedRows);
+    await syncPatternWarehouseMeters(supabase, affectedPatternIds);
+    throw new Error("Secilen toplarin durumu islem sirasinda degisti. Listeyi yenileyip tekrar deneyin.");
+  }
+
+  try {
+    await syncPatternWarehouseMeters(supabase, affectedPatternIds);
+
+    const transaction = await depoTransactionsSupabaseRepo.createTransaction({
+      type,
+      createdAt,
+      customerId,
+      customerNameSnapshot,
+      note: normalizeText(input.note),
+      lines: normalized.lines,
+    });
+
+    return {
+      transaction,
+      updatedRolls: changedRows.map(mapRowToRoll),
+    };
+  } catch (error) {
+    let rollbackMessage = "";
+
+    try {
+      await restoreRollRows(supabase, fetchedRows);
+      await syncPatternWarehouseMeters(supabase, affectedPatternIds);
+    } catch (rollbackError) {
+      rollbackMessage =
+        rollbackError instanceof Error
+          ? ` Geri alma sirasinda ek hata olustu: ${rollbackError.message}`
+          : " Geri alma sirasinda ek hata olustu.";
+    }
+
+    const message =
+      error instanceof Error ? error.message : "Toplu islem tamamlanamadi.";
+    throw new Error(`${message}${rollbackMessage}`);
+  }
+};
 
 export async function listAllRollsFromSupabase(
   filters: RollFilters = {}
@@ -443,6 +645,18 @@ export const depoSupabaseRepo = {
   },
 
   // ── Reserve ──────────────────────────────────────────────────────────────
+  async applyBulkShipment(
+    input: ApplyBulkTransactionInput
+  ): Promise<ApplyBulkTransactionResult> {
+    return applyBulkTransaction("SHIPMENT", input);
+  },
+
+  async applyBulkReservation(
+    input: ApplyBulkTransactionInput
+  ): Promise<ApplyBulkTransactionResult> {
+    return applyBulkTransaction("RESERVATION", input);
+  },
+
   async reserveRoll(
     rollId: string,
     reservedFor: string,
