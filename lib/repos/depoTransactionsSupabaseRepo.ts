@@ -246,6 +246,39 @@ export const depoTransactionsSupabaseRepo = {
   },
 
   // ── Get single transaction ─────────────────────────────────────────────────
+  async listLinesByTransactionIds(transactionIds: string[]): Promise<DepoTransactionLine[]> {
+    const supabase = createClient();
+    const rows: DepoTransactionLineRow[] = [];
+    const normalizedIds = Array.from(
+      new Set(transactionIds.map((id) => id.trim()).filter(Boolean))
+    );
+
+    if (normalizedIds.length === 0) return [];
+
+    for (let from = 0; ; from += TRANSACTIONS_PAGE_SIZE) {
+      const to = from + TRANSACTIONS_PAGE_SIZE - 1;
+      const { data, error } = await supabase
+        .from("depo_transaction_lines")
+        .select("*")
+        .in("transaction_id", normalizedIds)
+        .range(from, to)
+        .returns<DepoTransactionLineRow[]>();
+
+      if (error) {
+        throw new Error(`depo_transaction_lines.listByTransactionIds: ${error.message}`);
+      }
+
+      const chunk = data ?? [];
+      rows.push(...chunk);
+
+      if (chunk.length < TRANSACTIONS_PAGE_SIZE) {
+        break;
+      }
+    }
+
+    return rows.map(mapRowToLine);
+  },
+
   async getTransaction(id: string): Promise<DepoTransaction | undefined> {
     const supabase = createClient();
     const { data, error } = await supabase

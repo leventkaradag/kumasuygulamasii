@@ -182,7 +182,14 @@ const transactionTypeLabel: Record<DepoTransactionType, string> = {
   ADJUSTMENT: "Duzeltme",
 };
 
-const todayInput = () => new Date().toISOString().slice(0, 10);
+const formatDateInputValue = (date: Date) => {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const todayInput = () => formatDateInputValue(new Date());
 const fmt = (n: number) => n.toLocaleString("tr-TR", { maximumFractionDigits: 2 });
 const normalizeSearchToken = (value: string) =>
   value.trim().toLocaleLowerCase("tr-TR").replace(/\s+/g, " ");
@@ -206,6 +213,23 @@ const toIsoDate = (value: string, label: string) => {
   const parsed = new Date(`${trimmed}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) throw new Error(`${label} gecersiz`);
   return parsed.toISOString();
+};
+
+const toLocalDayRangeIso = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error("Rapor tarihi gerekli");
+
+  const start = new Date(`${trimmed}T00:00:00`);
+  const end = new Date(`${trimmed}T23:59:59.999`);
+
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    throw new Error("Rapor tarihi gecersiz");
+  }
+
+  return {
+    from: start.toISOString(),
+    to: end.toISOString(),
+  };
 };
 
 const toPositiveNumber = (value: string, label: string) => {
@@ -554,6 +578,7 @@ export default function DepoPage() {
   const [operationSummary, setOperationSummary] = useState<OperationSummary | null>(null);
   const [dailyEntryReportDate, setDailyEntryReportDate] = useState(todayInput());
   const [dailyEntryReportFeedback, setDailyEntryReportFeedback] = useState("");
+  const [isDailyEntryReportLoading, setIsDailyEntryReportLoading] = useState(false);
 
   const [selectedByRowKey, setSelectedByRowKey] = useState<Record<string, number>>({});
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
@@ -1410,12 +1435,27 @@ export default function DepoPage() {
     return customers.find((customer) => customer.nameNormalized === normalizedReturnCustomer);
   }, [customers, normalizedReturnCustomer]);
 
-  const handleDownloadDailyEntryReport = () => {
+  const handleDownloadDailyEntryReport = async () => {
     try {
+      setIsDailyEntryReportLoading(true);
+      setDailyEntryReportFeedback("");
+
+      const { from, to } = toLocalDayRangeIso(dailyEntryReportDate);
+      const fetchedTransactions = await depoTransactionsSupabaseRepo.listAllTransactions({
+        from,
+        to,
+      });
+      const entryTransactionIds = fetchedTransactions
+        .filter((transaction) => transaction.type === "ENTRY" && transaction.status === "ACTIVE")
+        .map((transaction) => transaction.id);
+      const fetchedLines = await depoTransactionsSupabaseRepo.listLinesByTransactionIds(
+        entryTransactionIds
+      );
+
       const report = buildDepoDailyEntryReport({
         reportDate: dailyEntryReportDate,
-        transactions,
-        transactionLines,
+        transactions: fetchedTransactions,
+        transactionLines: fetchedLines,
         patterns,
       });
       const fileName = downloadDepoDailyEntryReportXlsx(report);
@@ -1428,6 +1468,8 @@ export default function DepoPage() {
       setDailyEntryReportFeedback(
         error instanceof Error ? error.message : "Giris cizelgesi indirilemedi."
       );
+    } finally {
+      setIsDailyEntryReportLoading(false);
     }
   };
 
@@ -2014,9 +2056,15 @@ export default function DepoPage() {
             <button
               type="button"
               onClick={handleDownloadDailyEntryReport}
-              className="rounded-lg border border-emerald-500/30 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+              disabled={isDailyEntryReportLoading}
+              className={cn(
+                "rounded-lg border px-3 py-2 text-sm font-semibold transition",
+                isDailyEntryReportLoading
+                  ? "cursor-wait border-emerald-500/20 bg-emerald-50/70 text-emerald-500"
+                  : "border-emerald-500/30 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+              )}
             >
-              Excel Indir
+              {isDailyEntryReportLoading ? "Hazirlaniyor..." : "Excel Indir"}
             </button>
           </div>
         </div>

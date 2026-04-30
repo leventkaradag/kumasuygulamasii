@@ -237,7 +237,7 @@ export function DonutShareChart({ rows, totalMetres }: DonutShareChartProps) {
 
   return (
     <div className="grid h-full min-h-0 gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
-      <div className="flex flex-col items-center justify-center rounded-[24px] border border-black/5 bg-[linear-gradient(180deg,rgba(248,250,252,0.75),rgba(255,255,255,0.95))] p-4">
+      <div className="flex flex-col items-center justify-start rounded-[24px] border border-black/5 bg-[linear-gradient(180deg,rgba(248,250,252,0.75),rgba(255,255,255,0.95))] p-4">
         <svg viewBox="0 0 200 200" className="h-64 w-64">
           <circle
             cx="100"

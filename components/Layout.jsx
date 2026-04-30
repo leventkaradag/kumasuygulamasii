@@ -8,6 +8,8 @@ import { createClient } from "@/lib/supabase/client";
 import { useAuthProfile } from "@/components/AuthProfileProvider";
 import { cn } from "../lib/cn";
 
+const TOP_NAV_HIDDEN_ROUTES = new Set(["/ayarlar", "/admin-paneli"]);
+
 /**
  * @param {{
  *   title?: string;
@@ -85,7 +87,9 @@ export default function Layout({ title, description = undefined, children }) {
               </div>
             </div>
             <nav data-anim="nav" className="hidden flex-wrap items-center gap-2 md:flex">
-              {menuItems.map((item) => {
+              {menuItems
+                .filter((item) => !TOP_NAV_HIDDEN_ROUTES.has(item.href))
+                .map((item) => {
                 const isActive =
                   pathname === item.href || pathname.startsWith(`${item.href}/`);
                 return (
@@ -102,7 +106,7 @@ export default function Layout({ title, description = undefined, children }) {
                     {item.label}
                   </Link>
                 );
-              })}
+                })}
             </nav>
           </div>
 
