@@ -26,9 +26,9 @@ export default async function PanelLayout({
 
   return (
     <AuthProfileProvider profile={profile}>
-      <div className="flex min-h-screen">
+      <div className="flex min-h-screen overflow-x-hidden bg-coffee-surface">
         <Sidebar />
-        <main className="flex-1">{children}</main>
+        <main className="min-w-0 flex-1 overflow-x-hidden">{children}</main>
       </div>
     </AuthProfileProvider>
   );

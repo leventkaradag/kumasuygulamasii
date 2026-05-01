@@ -141,6 +141,30 @@ type HistoryRow = {
   totals: { totalTops: number; totalMetres: number; patternCount: number };
 };
 
+type MobileColorDetail = {
+  key: string;
+  color: string;
+  totalMeters: number;
+  totalRolls: number;
+  reservedMeters: number;
+  reservedRolls: number;
+  availableMeters: number;
+  availableRolls: number;
+  rolls: FabricRoll[];
+};
+
+type MobilePatternSummary = {
+  pattern: Pattern;
+  totalMeters: number;
+  totalRolls: number;
+  reservedMeters: number;
+  reservedRolls: number;
+  availableMeters: number;
+  availableRolls: number;
+  colorCount: number;
+  colors: MobileColorDetail[];
+};
+
 const statusLabel: Record<FabricRollStatus, string> = {
   IN_STOCK: "Stokta",
   RESERVED: "Rezerve",
@@ -382,6 +406,53 @@ const buildColorSummary = (rolls: FabricRoll[], pattern: Pattern): ColorSummary[
     .sort((a, b) => a.color.localeCompare(b.color, "tr-TR"));
 };
 
+const buildMobileColorDetails = (rolls: FabricRoll[], pattern: Pattern): MobileColorDetail[] => {
+  const map = new Map<string, MobileColorDetail>();
+
+  rolls.forEach((roll) => {
+    const color = rollColor(roll, pattern);
+    const key = `${pattern.id}|${toColorKey(color)}`;
+
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        color,
+        totalMeters: 0,
+        totalRolls: 0,
+        reservedMeters: 0,
+        reservedRolls: 0,
+        availableMeters: 0,
+        availableRolls: 0,
+        rolls: [],
+      });
+    }
+
+    const bucket = map.get(key)!;
+    bucket.rolls.push(roll);
+    bucket.totalMeters += roll.meters;
+    bucket.totalRolls += 1;
+
+    if (roll.status === "RESERVED") {
+      bucket.reservedMeters += roll.meters;
+      bucket.reservedRolls += 1;
+    } else {
+      bucket.availableMeters += roll.meters;
+      bucket.availableRolls += 1;
+    }
+  });
+
+  return Array.from(map.values())
+    .map((bucket) => ({
+      ...bucket,
+      rolls: [...bucket.rolls].sort((left, right) => {
+        const byStatus = statusSortPriority[left.status] - statusSortPriority[right.status];
+        if (byStatus !== 0) return byStatus;
+        return toTimestamp(left.inAt) - toTimestamp(right.inAt);
+      }),
+    }))
+    .sort((left, right) => left.color.localeCompare(right.color, "tr-TR"));
+};
+
 const calculateTotalsFromLines = (lines: DepoTransactionLine[]) => {
   const patternIds = new Set<string>();
   let totalTops = 0;
@@ -595,6 +666,8 @@ export default function DepoPage() {
   const [historyCustomerQuery, setHistoryCustomerQuery] = useState("");
   const [historyFeedback, setHistoryFeedback] = useState("");
   const [detailTransactionId, setDetailTransactionId] = useState<string | null>(null);
+  const [mobileOpenPatternId, setMobileOpenPatternId] = useState<string | null>(null);
+  const [mobileOpenColorKeys, setMobileOpenColorKeys] = useState<Set<string>>(() => new Set());
 
   const [editRollId, setEditRollId] = useState<string | null>(null);
   const [editMeters, setEditMeters] = useState("");
@@ -982,6 +1055,31 @@ export default function DepoPage() {
     [selectedPatternActiveRolls]
   );
   const selectedPatternTotalRolls = selectedPatternActiveRolls.length;
+  const mobilePatternSummaries = useMemo<MobilePatternSummary[]>(
+    () =>
+      filteredPatterns.map((pattern) => {
+        const patternRolls = rollsInRange.filter(
+          (roll) =>
+            roll.patternId === pattern.id &&
+            roll.status !== "VOIDED" &&
+            STOCK_VISIBLE_STATUSES.has(roll.status)
+        );
+        const colors = buildMobileColorDetails(patternRolls, pattern);
+
+        return {
+          pattern,
+          totalMeters: patternRolls.reduce((total, roll) => total + roll.meters, 0),
+          totalRolls: patternRolls.length,
+          reservedMeters: colors.reduce((total, color) => total + color.reservedMeters, 0),
+          reservedRolls: colors.reduce((total, color) => total + color.reservedRolls, 0),
+          availableMeters: colors.reduce((total, color) => total + color.availableMeters, 0),
+          availableRolls: colors.reduce((total, color) => total + color.availableRolls, 0),
+          colorCount: colors.length,
+          colors,
+        };
+      }),
+    [filteredPatterns, rollsInRange]
+  );
 
   const returnSelectedPattern = useMemo(
     () => patterns.find((pattern) => pattern.id === returnPatternId) ?? null,
@@ -1104,6 +1202,13 @@ export default function DepoPage() {
     setExpandedGroups(new Set());
   }, [selectedPatternId]);
 
+  useEffect(() => {
+    if (!mobileOpenPatternId) return;
+    if (filteredPatterns.some((pattern) => pattern.id === mobileOpenPatternId)) return;
+    setMobileOpenPatternId(null);
+    setMobileOpenColorKeys(new Set());
+  }, [filteredPatterns, mobileOpenPatternId]);
+
   const colorSummary = useMemo(() => (selectedPattern ? buildColorSummary(selectedPatternRolls, selectedPattern) : []), [selectedPatternRolls, selectedPattern]);
 
   const totalRolls = rollsInRange.filter((roll) => STOCK_VISIBLE_STATUSES.has(roll.status));
@@ -1111,6 +1216,24 @@ export default function DepoPage() {
   const availableRolls = rollsInRange.filter(
     (roll) => roll.status === "IN_STOCK" || roll.status === "RETURNED"
   );
+
+  const toggleMobilePattern = (patternId: string) => {
+    setSelectedPatternId(patternId);
+    setMobileOpenPatternId((current) => (current === patternId ? null : patternId));
+    setMobileOpenColorKeys(new Set());
+  };
+
+  const toggleMobileColorKey = (colorKey: string) => {
+    setMobileOpenColorKeys((current) => {
+      const next = new Set(current);
+      if (next.has(colorKey)) {
+        next.delete(colorKey);
+      } else {
+        next.add(colorKey);
+      }
+      return next;
+    });
+  };
 
   const updateAddRow = (rowId: string, field: keyof Omit<RollInputRow, "id">, value: string) => {
     setAddRows((current) =>
@@ -2002,10 +2125,28 @@ export default function DepoPage() {
             </button>
           </div>
         )}
-        <div className="grid gap-3 md:grid-cols-3">
-          <SummaryCard title="Toplam" meters={totalRolls.reduce((t, r) => t + r.meters, 0)} rolls={totalRolls.length} tone="neutral" />
-          <SummaryCard title="Rezerve" meters={reservedRolls.reduce((t, r) => t + r.meters, 0)} rolls={reservedRolls.length} tone="amber" />
-          <SummaryCard title="Kullanilabilir" meters={availableRolls.reduce((t, r) => t + r.meters, 0)} rolls={availableRolls.length} tone="emerald" />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
+          <SummaryCard
+            title="Toplam"
+            meters={totalRolls.reduce((t, r) => t + r.meters, 0)}
+            rolls={totalRolls.length}
+            tone="neutral"
+            compactMobile
+          />
+          <SummaryCard
+            title="Rezerve"
+            meters={reservedRolls.reduce((t, r) => t + r.meters, 0)}
+            rolls={reservedRolls.length}
+            tone="amber"
+            className="hidden sm:block"
+          />
+          <SummaryCard
+            title="Kullanilabilir"
+            meters={availableRolls.reduce((t, r) => t + r.meters, 0)}
+            rolls={availableRolls.length}
+            tone="emerald"
+            className="hidden sm:block"
+          />
         </div>
         {depoFlowLoaded && !depoFlowEnabled && incomingBoyahaneDocs.length > 0 ? (
           <div className="rounded-xl border border-amber-500/30 bg-amber-50 p-4">
@@ -2113,13 +2254,197 @@ export default function DepoPage() {
         </div>
 
         {activeTab !== "tx" ? (
-        <div className="grid min-h-0 h-[calc(100vh-320px)] gap-4 lg:grid-cols-[340px,1fr]">
+        <>
+        {activeTab === "stock" ? (
+          <section className="space-y-4 lg:hidden">
+            <div className="rounded-2xl border border-black/10 bg-white/90 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="space-y-3">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.22em] text-neutral-500">Mobil Depo Gorunumu</div>
+                  <h2 className="mt-1 text-xl font-semibold text-neutral-900">Desen ve renk stoklari</h2>
+                  <p className="mt-1 text-sm leading-6 text-neutral-600">
+                    Once deseni, sonra rengi acarak top ve metre detaylarini rahatca inceleyin.
+                  </p>
+                </div>
+                <label className="relative block">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+                  <input
+                    type="search"
+                    value={searchPattern}
+                    onChange={(event) => setSearchPattern(event.target.value)}
+                    placeholder="Desen no / kumas adi ara"
+                    className="w-full rounded-xl border border-black/10 bg-white px-10 py-3 text-base text-neutral-900 shadow-[0_8px_18px_rgba(0,0,0,0.05)] focus:outline-none focus:ring-2 focus:ring-coffee-primary"
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {isLoadingRolls ? (
+                <div className="rounded-2xl border border-dashed border-black/10 bg-white/75 px-4 py-10 text-center text-base font-semibold text-coffee-primary/80">
+                  Yukleniyor...
+                </div>
+              ) : mobilePatternSummaries.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-black/10 bg-white/75 px-4 py-10 text-center text-sm text-neutral-500">
+                  Filtreye uygun desen bulunamadi.
+                </div>
+              ) : (
+                mobilePatternSummaries.map((summary) => {
+                  const isOpen = mobileOpenPatternId === summary.pattern.id;
+                  return (
+                    <article
+                      key={summary.pattern.id}
+                      className={cn(
+                        "overflow-hidden rounded-2xl border bg-white/90 shadow-[0_10px_26px_rgba(0,0,0,0.08)] transition",
+                        isOpen ? "border-coffee-primary/35" : "border-black/8"
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleMobilePattern(summary.pattern.id)}
+                        className="flex w-full flex-col gap-3 px-4 py-4 text-left"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h3 className="text-lg font-semibold leading-6 text-neutral-900">
+                              {summary.pattern.fabricCode} - {summary.pattern.fabricName}
+                            </h3>
+                            <p className="mt-1 text-sm text-neutral-600">{shortNote(summary.pattern.note)}</p>
+                          </div>
+                          <span className="shrink-0 rounded-full border border-black/10 bg-coffee-surface px-3 py-1 text-xs font-semibold text-neutral-700">
+                            {isOpen ? "Detayi Kapat" : "Detayi Ac"}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="rounded-xl border border-black/8 bg-neutral-50 px-3 py-3">
+                            <div className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Toplam</div>
+                            <div className="mt-1 text-base font-semibold text-neutral-900">{fmt(summary.totalMeters)} m</div>
+                            <div className="text-sm text-neutral-600">{summary.totalRolls} top</div>
+                          </div>
+                          <div className="rounded-xl border border-black/8 bg-neutral-50 px-3 py-3">
+                            <div className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Kullanilabilir</div>
+                            <div className="mt-1 text-base font-semibold text-neutral-900">{fmt(summary.availableMeters)} m</div>
+                            <div className="text-sm text-neutral-600">{summary.availableRolls} top</div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 text-sm text-neutral-600">
+                          <span className="rounded-full border border-amber-500/20 bg-amber-50 px-2.5 py-1 font-medium text-amber-700">
+                            Rezerve: {fmt(summary.reservedMeters)} m / {summary.reservedRolls} top
+                          </span>
+                          <span className="rounded-full border border-black/10 bg-white px-2.5 py-1 font-medium text-neutral-700">
+                            Renk: {summary.colorCount} cesit
+                          </span>
+                        </div>
+                      </button>
+
+                      {isOpen ? (
+                        <div className="border-t border-black/6 bg-[linear-gradient(180deg,rgba(250,247,242,0.95),rgba(255,255,255,0.98))] px-4 py-4">
+                          {canManageWarehouse || canUseBasket ? (
+                            <div className="mb-3 rounded-xl border border-black/8 bg-white/85 px-3 py-2 text-xs text-neutral-600">
+                              Islem butonlari bu fazda mobilde geri planda tutuldu. Ayrintili islem kullanimi icin genis ekran onerilir.
+                            </div>
+                          ) : null}
+
+                          <div className="space-y-3">
+                            {summary.colors.map((color) => {
+                              const colorOpen = mobileOpenColorKeys.has(color.key);
+                              return (
+                                <div
+                                  key={color.key}
+                                  className="overflow-hidden rounded-2xl border border-black/8 bg-white shadow-[0_8px_20px_rgba(0,0,0,0.05)]"
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleMobileColorKey(color.key)}
+                                    className="flex w-full flex-col gap-2 px-4 py-4 text-left"
+                                  >
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div>
+                                        <div className="text-base font-semibold text-neutral-900">{color.color}</div>
+                                        <div className="mt-1 text-sm text-neutral-600">
+                                          {fmt(color.totalMeters)} m / {color.totalRolls} top
+                                        </div>
+                                      </div>
+                                      <span className="shrink-0 rounded-full border border-black/10 bg-neutral-50 px-2.5 py-1 text-[11px] font-semibold text-neutral-700">
+                                        {colorOpen ? "Toplari Gizle" : "Toplari Goster"}
+                                      </span>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                      <div className="rounded-xl border border-emerald-500/20 bg-emerald-50 px-3 py-2">
+                                        <div className="text-[11px] uppercase tracking-[0.16em] text-emerald-700">Kullanilabilir</div>
+                                        <div className="mt-1 text-sm font-semibold text-neutral-900">
+                                          {fmt(color.availableMeters)} m / {color.availableRolls} top
+                                        </div>
+                                      </div>
+                                      <div className="rounded-xl border border-amber-500/20 bg-amber-50 px-3 py-2">
+                                        <div className="text-[11px] uppercase tracking-[0.16em] text-amber-700">Rezerve</div>
+                                        <div className="mt-1 text-sm font-semibold text-neutral-900">
+                                          {fmt(color.reservedMeters)} m / {color.reservedRolls} top
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </button>
+
+                                  {colorOpen ? (
+                                    <div className="border-t border-black/6 bg-neutral-50/80 px-4 py-3">
+                                      <div className="space-y-2">
+                                        {color.rolls.map((roll, index) => (
+                                          <div
+                                            key={roll.id}
+                                            className="rounded-xl border border-black/8 bg-white px-3 py-3 shadow-[0_6px_16px_rgba(0,0,0,0.04)]"
+                                          >
+                                            <div className="flex items-start justify-between gap-3">
+                                              <div>
+                                                <div className="text-sm font-semibold text-neutral-900">
+                                                  {roll.rollNo?.trim() || `${index + 1}. Top`}
+                                                </div>
+                                                <div className="mt-1 text-base font-semibold text-neutral-900">
+                                                  {fmt(roll.meters)} m
+                                                </div>
+                                                {(roll.reservedFor ?? roll.counterparty) ? (
+                                                  <div className="mt-1 text-xs text-neutral-500">
+                                                    {roll.reservedFor ?? roll.counterparty}
+                                                  </div>
+                                                ) : null}
+                                              </div>
+                                              <span
+                                                className={cn(
+                                                  "inline-flex rounded-full border px-2 py-1 text-[11px] font-semibold",
+                                                  statusClass[roll.status]
+                                                )}
+                                              >
+                                                {statusLabel[roll.status]}
+                                              </span>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })
+              )}
+            </div>
+          </section>
+        ) : null}
+
+        <div className={cn("min-h-0 h-[calc(100vh-320px)] gap-4 lg:grid-cols-[340px,1fr]", activeTab === "stock" ? "hidden lg:grid" : "grid")}>
           <aside className="min-h-0 overflow-auto rounded-2xl border border-black/5 bg-white/80 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
             <div className="space-y-3">
               <h2 className="text-lg font-semibold text-neutral-900">Desen Klasorleri</h2>
               <label className="relative block">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
-                <input type="search" value={searchPattern} onChange={(e) => setSearchPattern(e.target.value)} placeholder="Kumas kodu / adi" className="w-full rounded-lg border border-black/10 bg-white px-10 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
+                <input type="search" value={searchPattern} onChange={(e) => setSearchPattern(e.target.value)} placeholder="Desen no / kumas adi ara" className="w-full rounded-lg border border-black/10 bg-white px-10 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
               </label>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
                 <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-coffee-primary" />
@@ -2547,6 +2872,7 @@ export default function DepoPage() {
             )}
           </section>
         </div>
+        </>
         ) : (
           <section className="min-h-0 h-[calc(100vh-320px)] overflow-auto rounded-2xl border border-black/5 bg-white/80 p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
             <div className="space-y-4">
@@ -3139,9 +3465,11 @@ type SummaryCardProps = {
   meters: number;
   rolls: number;
   tone: "neutral" | "amber" | "emerald";
+  className?: string;
+  compactMobile?: boolean;
 };
 
-function SummaryCard({ title, meters, rolls, tone }: SummaryCardProps) {
+function SummaryCard({ title, meters, rolls, tone, className, compactMobile = false }: SummaryCardProps) {
   const toneClass =
     tone === "amber"
       ? "border-amber-500/30 bg-amber-50"
@@ -3149,10 +3477,35 @@ function SummaryCard({ title, meters, rolls, tone }: SummaryCardProps) {
         ? "border-emerald-500/30 bg-emerald-50"
         : "border-black/10 bg-white";
   return (
-    <div className={cn("rounded-xl border p-4 shadow-[0_8px_20px_rgba(0,0,0,0.05)]", toneClass)}>
-      <div className="text-xs uppercase tracking-wide text-neutral-500">{title}</div>
-      <div className="mt-2 text-lg font-semibold text-neutral-900">{fmt(meters)} m</div>
-      <div className="text-sm text-neutral-600">{rolls} top</div>
+    <div
+      className={cn(
+        "rounded-xl border p-3 shadow-[0_6px_16px_rgba(0,0,0,0.05)] sm:p-4 sm:shadow-[0_8px_20px_rgba(0,0,0,0.05)]",
+        toneClass,
+        className
+      )}
+    >
+      {compactMobile ? (
+        <>
+          <div className="flex items-center justify-between gap-3 sm:hidden">
+            <div className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">{title} Stok</div>
+            <div className="text-right text-sm font-semibold text-neutral-900">
+              {fmt(meters)} m
+              <span className="ml-1 text-xs font-medium text-neutral-600">· {rolls} top</span>
+            </div>
+          </div>
+          <div className="hidden sm:block">
+            <div className="text-xs uppercase tracking-wide text-neutral-500">{title}</div>
+            <div className="mt-2 text-lg font-semibold text-neutral-900">{fmt(meters)} m</div>
+            <div className="text-sm text-neutral-600">{rolls} top</div>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="text-[11px] uppercase tracking-[0.16em] text-neutral-500 sm:text-xs sm:tracking-wide">{title}</div>
+          <div className="mt-1.5 text-base font-semibold leading-tight text-neutral-900 sm:mt-2 sm:text-lg">{fmt(meters)} m</div>
+          <div className="mt-0.5 text-xs text-neutral-600 sm:text-sm">{rolls} top</div>
+        </>
+      )}
     </div>
   );
 }

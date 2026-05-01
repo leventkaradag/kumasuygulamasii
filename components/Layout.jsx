@@ -3,9 +3,11 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef } from "react";
+import { Menu } from "lucide-react";
 import { gsap } from "gsap";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthProfile } from "@/components/AuthProfileProvider";
+import { PANEL_NAV_TOGGLE_EVENT } from "@/components/Sidebar";
 import { cn } from "../lib/cn";
 
 const TOP_NAV_HIDDEN_ROUTES = new Set(["/ayarlar", "/admin-paneli"]);
@@ -60,8 +62,15 @@ export default function Layout({ title, description = undefined, children }) {
     router.refresh();
   };
 
+  const toggleMobileNavigation = () => {
+    window.dispatchEvent(new Event(PANEL_NAV_TOGGLE_EVENT));
+  };
+
   return (
-    <div ref={rootRef} className="page-shell relative flex min-h-screen flex-col text-neutral-900">
+    <div
+      ref={rootRef}
+      className="page-shell relative flex min-h-screen flex-col overflow-x-hidden text-neutral-900"
+    >
       <div className="pointer-events-none absolute inset-0 -z-10">
         <div
           data-anim="orb"
@@ -75,18 +84,30 @@ export default function Layout({ title, description = undefined, children }) {
       </div>
 
       <header className="sticky top-0 z-20 border-b border-black/5 bg-white/70 backdrop-blur-md">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-4">
-          <div className="flex items-center gap-4">
-            <div data-anim="nav" className="flex items-center gap-3">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-3 py-3 sm:px-6 sm:py-4">
+          <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+            <button
+              type="button"
+              onClick={toggleMobileNavigation}
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-black/10 bg-white/90 text-neutral-800 shadow-[0_6px_16px_rgba(0,0,0,0.08)] transition hover:-translate-y-0.5 hover:border-black/20 hover:shadow-[0_10px_20px_rgba(0,0,0,0.12)] lg:hidden"
+              aria-label="Menüyü aç"
+            >
+              <Menu className="h-5 w-5" aria-hidden />
+            </button>
+            <div data-anim="nav" className="flex min-w-0 items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-coffee-primary text-white shadow-[0_8px_20px_rgba(0,0,0,0.12)]">
                 KP
               </div>
-              <div>
-                <div className="font-display text-lg font-semibold text-neutral-900">Kumasci Panel</div>
-                <div className="text-xs uppercase tracking-[0.2em] text-neutral-500">Atelier Ops</div>
+              <div className="min-w-0">
+                <div className="truncate font-display text-base font-semibold text-neutral-900 sm:text-lg">
+                  Kumasci Panel
+                </div>
+                <div className="hidden text-[11px] uppercase tracking-[0.2em] text-neutral-500 sm:block">
+                  Atelier Ops
+                </div>
               </div>
             </div>
-            <nav data-anim="nav" className="hidden flex-wrap items-center gap-2 md:flex">
+            <nav data-anim="nav" className="hidden flex-wrap items-center gap-2 lg:flex">
               {menuItems
                 .filter((item) => !TOP_NAV_HIDDEN_ROUTES.has(item.href))
                 .map((item) => {
@@ -110,8 +131,8 @@ export default function Layout({ title, description = undefined, children }) {
             </nav>
           </div>
 
-          <div data-anim="nav" className="flex items-center gap-3">
-            <div className="hidden text-right sm:block">
+          <div data-anim="nav" className="flex items-center gap-2 sm:gap-3">
+            <div className="hidden text-right md:block">
               <div className="text-sm font-semibold text-neutral-900">{displayName}</div>
               <div className="text-xs text-neutral-500">
                 {profile?.email || "-"} | rol: {role}
@@ -124,7 +145,7 @@ export default function Layout({ title, description = undefined, children }) {
             </div>
             <button
               onClick={onLogout}
-              className="rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold text-neutral-800 shadow-[0_6px_16px_rgba(0,0,0,0.08)] transition hover:-translate-y-0.5 hover:border-black/20 hover:shadow-[0_10px_20px_rgba(0,0,0,0.12)]"
+              className="rounded-full border border-black/10 bg-white px-3 py-2 text-sm font-semibold text-neutral-800 shadow-[0_6px_16px_rgba(0,0,0,0.08)] transition hover:-translate-y-0.5 hover:border-black/20 hover:shadow-[0_10px_20px_rgba(0,0,0,0.12)] sm:px-4"
             >
               Cikis
             </button>
@@ -132,10 +153,10 @@ export default function Layout({ title, description = undefined, children }) {
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col px-6 pb-16 pt-10">
-        <div data-anim="hero" className="mb-6 space-y-2">
+      <main className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-3 pb-12 pt-6 sm:px-6 sm:pb-16 sm:pt-8 lg:pt-10">
+        <div data-anim="hero" className="mb-4 space-y-2 sm:mb-6">
           <div className="text-xs uppercase tracking-[0.3em] text-neutral-500">Kumasci Studio</div>
-          <h1 className="font-display text-3xl font-semibold text-neutral-900 md:text-4xl">
+          <h1 className="font-display text-2xl font-semibold text-neutral-900 sm:text-3xl md:text-4xl">
             {title || "Panel"}
           </h1>
           <p className="text-sm text-neutral-600 md:text-base">
@@ -150,12 +171,12 @@ export default function Layout({ title, description = undefined, children }) {
 
         <section
           data-anim="panel"
-          className="flex min-h-0 flex-1 flex-col rounded-[28px] border border-black/5 bg-white/80 p-6 shadow-[0_20px_50px_rgba(0,0,0,0.12)] backdrop-blur"
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-black/5 bg-white/80 p-4 shadow-[0_20px_50px_rgba(0,0,0,0.12)] backdrop-blur sm:rounded-[28px] sm:p-6"
         >
-          <div className="h-full min-h-0 overflow-hidden">{children}</div>
+          <div className="h-full min-h-0 min-w-0 overflow-hidden">{children}</div>
         </section>
 
-        <footer className="mt-4 px-2 text-center text-[11px] text-neutral-500 sm:text-right">
+        <footer className="mt-3 px-1 text-center text-[11px] text-neutral-500 sm:mt-4 sm:px-2 sm:text-right">
           Designed & developed by Ömer Levent Karadağ
         </footer>
       </main>
